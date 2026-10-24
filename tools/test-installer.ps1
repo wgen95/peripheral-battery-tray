@@ -77,6 +77,7 @@ Run-AndWait $SetupPath $setupArgs
 if (-not $main.WaitForExit(10000) -or $main.ExitCode -ne 0) { throw 'Upgrade failed to close the existing app normally.' }
 $main = Start-Process -FilePath $installed -WindowStyle Hidden -PassThru
 if ($main.WaitForExit(4000)) { throw 'Upgraded app did not stay running.' }
+if (-not (Test-Path -LiteralPath $runPath)) { New-Item -Path $runPath -Force | Out-Null }
 New-ItemProperty -LiteralPath $runPath -Name PeripheralBattery -Value ('"' + $installed + '"') -PropertyType String | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $dataDirectory 'uninstall-test/nested') | Out-Null
 Set-Content -LiteralPath (Join-Path $dataDirectory 'uninstall-test/nested/cache.txt') -Value 'Must be removed.'
