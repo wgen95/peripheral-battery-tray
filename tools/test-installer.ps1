@@ -36,12 +36,37 @@ $uninstaller = Join-Path $target 'unins000.exe'
 $registration = Get-ItemProperty -LiteralPath $registry
 if ($registration.DisplayVersion -ne '1.1.1' -or $registration.InstallLocation.TrimEnd('\') -ne $target) { throw 'Incorrect application registration.' }
 if (-not (Test-Path -LiteralPath $installed) -or -not (Test-Path -LiteralPath $shortcut) -or -not (Test-Path -LiteralPath $desktop)) { throw 'Missing installed app or shortcuts.' }
-$shell = New-Object -ComObject WScript.Shell
-$link = $shell.CreateShortcut([IO.Path]::GetFullPath($shortcut))
-Write-Output ("Shortcut target: {0}; arguments: {1}; installed app: {2}" -f $link.TargetPath, $link.Arguments, $installed)
-# Shell links may expose an equivalent DOS short path on another Windows image.
-if (-not (Test-Path -LiteralPath $link.TargetPath) -or $link.Arguments.Trim('"') -ne '--show') { throw 'Incorrect Start Menu shortcut.' }
-if ((Get-FileHash -LiteralPath $link.TargetPath).Hash -ne (Get-FileHash -LiteralPath $installed).Hash) { throw 'Shortcut points to a different executable.' }
+# Check the actual MS-SHLLINK payload. WScript.Shell returns empty shortcut
+# properties on the hosted Server image even though the .lnk file exists.
+foreach ($linkPath in @($shortcut, $desktop)) {
+    $bytes = [IO.File]::ReadAllBytes($linkPath)
+    if ($bytes.Length -lt 76 -or [BitConverter]::ToUInt32($bytes, 0) -ne 76 -or [BitConverter]::ToString($bytes[4..19]) -ne '01-14-02-00-00-00-00-00-C0-00-00-00-00-00-00-46') { throw 'Invalid shell link header.' }
+    $flags = [BitConverter]::ToUInt32($bytes, 20)
+    if (($flags -band 0x22) -ne 0x22) { throw 'Shell link has no local target or arguments field.' }
+    [Text.Encoding]::RegisterProvider([Text.CodePagesEncodingProvider]::Instance)
+    $ansi = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage)
+    $offset = 76
+    if ($flags -band 1) { $offset += 2 + [BitConverter]::ToUInt16($bytes, $offset) }
+    $linkInfoSize = [BitConverter]::ToUInt32($bytes, $offset)
+    $localOffset = $offset + [BitConverter]::ToUInt32($bytes, $offset + 16)
+    $end = $localOffset
+    while ($end -lt $bytes.Length -and $bytes[$end] -ne 0) { $end++ }
+    $linkedTarget = $ansi.GetString($bytes, $localOffset, $end - $localOffset)
+    $offset += $linkInfoSize
+    $encoding = if ($flags -band 0x80) { [Text.Encoding]::Unicode } else { $ansi }
+    $characterBytes = if ($flags -band 0x80) { 2 } else { 1 }
+    $arguments = ''
+    foreach ($fieldFlag in @(4, 8, 16, 32, 64)) {
+        if ($flags -band $fieldFlag) {
+            $length = [BitConverter]::ToUInt16($bytes, $offset) * $characterBytes
+            $offset += 2
+            $value = $encoding.GetString($bytes, $offset, $length)
+            if ($fieldFlag -eq 32) { $arguments = $value }
+            $offset += $length
+        }
+    }
+    if ($linkedTarget -ne $installed -or $arguments -ne '--show') { throw "Incorrect shell link target or argument: $linkedTarget / $arguments" }
+}
 $diagnostic = Join-Path $project 'evidence/installed-probe.json'
 Run-AndWait $installed @('--diagnose', ('"' + $diagnostic + '"'))
 if (-not (Test-Path -LiteralPath $diagnostic)) { throw 'Installed app failed to generate device diagnostics.' }
