@@ -6,7 +6,11 @@
 
 > 图示为实机采样的 UI 渲染；设备休眠或断连时不显示旧百分比。首次硬件验证：A950 50%，S75 57%，后续 S75 56%。这些是测试时的读数，不是固定展示数据。
 
-从 [Releases](https://github.com/wgen95/peripheral-battery-tray/releases) 下载 [Windows x64 独立版](https://github.com/wgen95/peripheral-battery-tray/releases/download/v1.0.0/PeripheralBattery-1.0.0-win-x64.zip)，解压并双击 `PeripheralBattery.exe`。此版本自带 .NET，不用另装运行时；正常运行无需联网、管理员权限或替换设备驱动。默认不开机自启。
+推荐下载 [Windows 安装程序](https://github.com/wgen95/peripheral-battery-tray/releases/download/v1.1.0/PeripheralBattery-1.1.0-Setup-x64.exe)，双击安装后即可从开始菜单打开。也可下载 [免安装 ZIP](https://github.com/wgen95/peripheral-battery-tray/releases/download/v1.1.0/PeripheralBattery-1.1.0-win-x64.zip)。两种版本都自带 .NET；正常运行无需联网、管理员权限或替换设备驱动，默认不开机自启。
+
+安装版默认位于 `%LOCALAPPDATA%/Programs/PeripheralBattery`，提供开始菜单入口和可选桌面快捷方式。在 Windows **设置 → 应用 → 已安装的应用 → 无线外设电量 → 卸载** 即可删除。卸载会正常退出程序，并清理程序文件、快捷方式、自启动项、配置、日志及本应用的 .NET 解包缓存。覆盖安装可以升级。安装包尚未进行代码签名。
+
+浮层只显示 `A950`、`S75` 和各自电量 / 状态，设备名称仅含字母与数字。面板为 180×68 逻辑像素。
 
 - 左键托盘图标：打开 / 收起深色两行面板；点外部或按 Esc 收起。
 - 鼠标悬停：紧凑浮层；可在设置中关闭，保留原生电量摘要。
@@ -35,6 +39,8 @@
 ./build.ps1
 # SDK 不在 PATH 时：
 ./build.ps1 -Dotnet 'C:/path/to/dotnet.exe'
+# 同时生成安装程序（需 Inno Setup 6.3+）
+./build.ps1 -Installer -Iscc 'C:/path/to/ISCC.exe'
 
 # 仅运行
 dotnet run --project src/PeripheralBattery.App
@@ -71,6 +77,7 @@ tests/PeripheralBattery.UiTests/ Windows UI 渲染、生命周期、Shell 注册
 tools/                          阶段二 Python 对照探针（仅开发，需 hidapi）
 docs/                           可行性、协议依据、测试结果、排查说明
 build.ps1                       可重复构建、测试、发布、打包和 SHA256
+installer/                      Inno Setup 安装与卸载配置
 ```
 
 配置与滚动日志保存在 `%LOCALAPPDATA%/PeripheralBattery`。自启动写入当前用户的 `HKCU/Software/Microsoft/Windows/CurrentVersion/Run`，可在设置取消。日志不持续记录每个不变读数；超过 1 MiB 轮换一次。诊断导出包含本机 HID 路径等信息，公开前请自行检查。原始本机 `evidence/` 不提交。

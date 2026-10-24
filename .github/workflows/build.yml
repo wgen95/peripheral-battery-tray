@@ -12,10 +12,36 @@ jobs:
           dotnet-version: '8.0.x'
       - name: Build, protocol tests and self-contained package
         shell: pwsh
-        run: ./build.ps1
+        run: ./build.ps1 -Installer
+      - name: Install, upgrade and clean uninstall smoke test
+        shell: pwsh
+        run: ./tools/test-installer.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: PeripheralBattery-win-x64
           path: |
-            dist/PeripheralBattery-1.0.0-win-x64.zip
+            dist/PeripheralBattery-*-win-x64.zip
+            dist/PeripheralBattery-*-Setup-x64.exe
             dist/SHA256SUMS.txt
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: PeripheralBattery-win-x64
+          path: release-dist
+      - name: Publish verified packages
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $assets = @(Get-ChildItem release-dist -File | ForEach-Object { $_.FullName })
+          gh release create $env:RELEASE_TAG @assets --verify-tag --title "$env:RELEASE_TAG · 安装版" --notes-file installer/release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }

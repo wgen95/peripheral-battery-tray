@@ -5,7 +5,8 @@ namespace PeripheralBattery.App;
 
 internal sealed class BatteryPopup : Form
 {
-    private Reading[] rows = [Reading.Empty("鼠标 A950", "鼠标", BatteryState.Unknown, "等待读取"), Reading.Empty("键盘 S75", "键盘", BatteryState.Unknown, "等待读取")];
+    private const int LogicalWidth = 180, LogicalHeight = 68;
+    private Reading[] rows = [Reading.Empty("A950", "鼠标", BatteryState.Unknown, "等待读取"), Reading.Empty("S75", "键盘", BatteryState.Unknown, "等待读取")];
     private readonly System.Windows.Forms.Timer leaveTimer = new() { Interval = 100 };
     private bool pinned;
     private long outsideSince;
@@ -22,7 +23,7 @@ internal sealed class BatteryPopup : Form
         Text = "无线外设电量"; FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true;
         BackColor = Color.FromArgb(38, 38, 40); ForeColor = Color.FromArgb(246, 246, 247);
         Font = new Font("Microsoft YaHei UI", 10f); DoubleBuffered = true;
-        AutoScaleMode = AutoScaleMode.None; ClientSize = new Size(220, 72);
+        AutoScaleMode = AutoScaleMode.None; ClientSize = new Size(LogicalWidth, LogicalHeight);
         leaveTimer.Tick += (_, _) =>
         {
             if (!Visible) return;
@@ -50,7 +51,7 @@ internal sealed class BatteryPopup : Form
         Location = new Point(Math.Clamp(anchor.X - Width / 2, area.Left, Math.Max(area.Left, area.Right - Width)),
             Math.Clamp(anchor.Y - Height - 12, area.Top, Math.Max(area.Top, area.Bottom - Height)));
         Show();
-        ClientSize = new Size(220 * DeviceDpi / 96, 72 * DeviceDpi / 96);
+        ClientSize = new Size(LogicalWidth * DeviceDpi / 96, LogicalHeight * DeviceDpi / 96);
         // Moving to a different monitor can change DPI and size during Show().
         Location = new Point(Math.Clamp(Left, area.Left, Math.Max(area.Left, area.Right - Width)), Math.Clamp(Top, area.Top, Math.Max(area.Top, area.Bottom - Height)));
         leaveTimer.Start();
@@ -59,14 +60,14 @@ internal sealed class BatteryPopup : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        ClientSize = new Size(220 * DeviceDpi / 96, 72 * DeviceDpi / 96);
+        ClientSize = new Size(LogicalWidth * DeviceDpi / 96, LogicalHeight * DeviceDpi / 96);
         if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
         { int corner = 2; NativeUi.DwmSetWindowAttribute(Handle, 33, ref corner, 4); }
     }
     protected override void OnDpiChanged(DpiChangedEventArgs e)
     {
         base.OnDpiChanged(e);
-        ClientSize = new Size(220 * e.DeviceDpiNew / 96, 72 * e.DeviceDpiNew / 96);
+        ClientSize = new Size(LogicalWidth * e.DeviceDpiNew / 96, LogicalHeight * e.DeviceDpiNew / 96);
     }
     protected override void OnPaint(PaintEventArgs e)
     {
@@ -77,7 +78,7 @@ internal sealed class BatteryPopup : Form
         float radius = 6 * scale, right = ClientSize.Width - 1, bottom = ClientSize.Height - 1;
         path.AddArc(0, 0, radius * 2, radius * 2, 180, 90); path.AddArc(right - radius * 2, 0, radius * 2, radius * 2, 270, 90);
         path.AddArc(right - radius * 2, bottom - radius * 2, radius * 2, radius * 2, 0, 90); path.AddArc(0, bottom - radius * 2, radius * 2, radius * 2, 90, 90); path.CloseFigure(); g.DrawPath(pen, path);
-        int pad = (int)(13 * scale), top = (int)(11 * scale), rowHeight = (int)(25 * scale), statusWidth = (int)(100 * scale);
+        int pad = (int)(12 * scale), top = (int)(10 * scale), rowHeight = (int)(24 * scale), statusWidth = (int)(100 * scale);
         for (int i = 0; i < 2; i++)
         {
             var row = rows[i]; var flags = TextFormatFlags.NoPadding | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis;

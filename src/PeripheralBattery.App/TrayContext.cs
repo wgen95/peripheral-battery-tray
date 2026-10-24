@@ -19,14 +19,14 @@ internal sealed class TrayContext : ApplicationContext
     private AppSettings settings = Storage.Load();
     private DiagnosticsForm? diagnostics;
     private SettingsForm? settingsForm;
-    private Snapshot current = new(DateTimeOffset.Now, [], Reading.Empty("鼠标 A950", "鼠标", BatteryState.Unknown, "等待读取"), Reading.Empty("键盘 S75", "键盘", BatteryState.Unknown, "等待读取"));
+    private Snapshot current = new(DateTimeOffset.Now, [], Reading.Empty("A950", "鼠标", BatteryState.Unknown, "等待读取"), Reading.Empty("S75", "键盘", BatteryState.Unknown, "等待读取"));
     private readonly Dictionary<string, Reading> history = new();
     private Point hoverPoint;
     private bool closing, suspended, disposed;
 
     internal TrayContext(bool show, bool showDiagnostics, bool showSettings, bool startMonitoring = true)
     {
-        Storage.Log("启动 v1.0.0");
+        Storage.Log("启动 v1.1.0");
         popup.LowThreshold = settings.LowThreshold;
         tray = new NotifyIcon { Icon = CreateIcon(), Text = "无线外设电量 · 正在读取", ContextMenuStrip = menu, Visible = true };
         menu.Items.Add("显示电量", null, (_, _) => ShowPopup(true));
