@@ -46,4 +46,25 @@ foreach (var state in Enum.GetValues<BatteryState>().Where(s => s != BatteryStat
     Check(!new Reading("test", "test", state, 77, "", "", DateTimeOffset.Now).Display.Contains('%'), "never expose stale percent");
 Check(Reading.Empty("a", "b", BatteryState.ReadFailed, "error").Percent == null, "failed result has no value");
 Check(Protocols.S75Request().Length == 65 && Protocols.S75Request()[7] == 1, "S75 report ID and packet flag");
+var activity = new KeyboardActivity(); var now = DateTimeOffset.Now;
+Check(!activity.IsActive(now), "startup must not wake a keyboard");
+Check(activity.Record(now) && activity.IsActive(now.AddSeconds(29)), "physical keyboard activity opens a bounded query window");
+Check(!activity.IsActive(now.AddSeconds(30)), "idle timeout stops queries before two-minute sleep");
+Check(!activity.Record(now.AddSeconds(10)), "continuous typing does not repeatedly request immediate probes");
+Check(activity.IsActive(now.AddSeconds(39)) && !activity.IsActive(now.AddSeconds(40)), "typing extends only activity window");
+activity.Reset(); Check(!activity.IsActive(now), "suspend clears previous activity");
+var provider = new CountingProvider();
+var idle = await Probe.ReadKeyboardAsync([], null, null, CancellationToken.None, provider);
+Check(provider.Calls == 0 && idle.State == BatteryState.Idle && idle.Percent == null, "idle request must not call HID provider or reuse percentage");
+await Probe.ReadKeyboardAsync([], null, now.AddSeconds(-1), CancellationToken.None, provider);
+Check(provider.Calls == 0, "expired worker request must not touch keyboard");
+await Probe.ReadKeyboardAsync([], null, DateTimeOffset.Now.AddSeconds(10), CancellationToken.None, provider);
+Check(provider.Calls == 1, "an active keyboard may be queried");
 Console.WriteLine($"PASS: {count} protocol and state assertions (synthetic fixtures; hardware is separate).");
+
+sealed class CountingProvider : IBatteryProvider
+{
+    public int Calls;
+    public Task<Reading> ReadAsync(List<HidDevice> devices, string? receiver, CancellationToken ct)
+    { Calls++; return Task.FromResult(Reading.Empty("S75", "键盘", BatteryState.Unknown, "test")); }
+}

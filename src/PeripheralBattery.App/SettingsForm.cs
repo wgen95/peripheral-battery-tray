@@ -32,7 +32,7 @@ internal sealed class SettingsForm : Form
         }
         Row(0, "间隔 / 秒", poll); Row(1, "低电量 / %", low); Row(2, "鼠标接收器", mouse); Row(3, "键盘接收器", keyboard);
         table.Controls.Add(startup, 1, 4); table.Controls.Add(hover, 1, 5);
-        var hint = new Label { Text = "正常监控无需联网。更换 USB 端口后，可能需要重新选择接口。", AutoSize = true, MaximumSize = new Size(510, 0), ForeColor = Color.DimGray };
+        var hint = new Label { Text = "键盘闲置 30 秒后暂停查询，按键后恢复。\n“立即刷新”会主动查询，可能唤醒设备。", AutoSize = true, MaximumSize = new Size(510, 0), ForeColor = Color.DimGray };
         table.Controls.Add(hint, 0, 6); table.SetColumnSpan(hint, 2);
         var save = new Button { Text = "保存", AutoSize = true, Anchor = AnchorStyles.Right };
         table.Controls.Add(save, 1, 7); Controls.Add(table); AcceptButton = save;

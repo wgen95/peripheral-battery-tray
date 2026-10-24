@@ -5,7 +5,7 @@ namespace PeripheralBattery.App;
 
 internal sealed class BatteryPopup : Form
 {
-    private const int LogicalWidth = 180, LogicalHeight = 68;
+    private const int LogicalWidth = 136, LogicalHeight = 58;
     private Reading[] rows = [Reading.Empty("A950", "鼠标", BatteryState.Unknown, "等待读取"), Reading.Empty("S75", "键盘", BatteryState.Unknown, "等待读取")];
     private readonly System.Windows.Forms.Timer leaveTimer = new() { Interval = 100 };
     private bool pinned;
@@ -21,8 +21,8 @@ internal sealed class BatteryPopup : Form
     internal BatteryPopup()
     {
         Text = "无线外设电量"; FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true;
-        BackColor = Color.FromArgb(38, 38, 40); ForeColor = Color.FromArgb(246, 246, 247);
-        Font = new Font("Microsoft YaHei UI", 10f); DoubleBuffered = true;
+        BackColor = Color.FromArgb(37, 37, 38); ForeColor = Color.FromArgb(246, 246, 247);
+        Font = new Font("Segoe UI", 10f); DoubleBuffered = true;
         AutoScaleMode = AutoScaleMode.None; ClientSize = new Size(LogicalWidth, LogicalHeight);
         leaveTimer.Tick += (_, _) =>
         {
@@ -78,7 +78,7 @@ internal sealed class BatteryPopup : Form
         float radius = 6 * scale, right = ClientSize.Width - 1, bottom = ClientSize.Height - 1;
         path.AddArc(0, 0, radius * 2, radius * 2, 180, 90); path.AddArc(right - radius * 2, 0, radius * 2, radius * 2, 270, 90);
         path.AddArc(right - radius * 2, bottom - radius * 2, radius * 2, radius * 2, 0, 90); path.AddArc(0, bottom - radius * 2, radius * 2, radius * 2, 90, 90); path.CloseFigure(); g.DrawPath(pen, path);
-        int pad = (int)(12 * scale), top = (int)(10 * scale), rowHeight = (int)(24 * scale), statusWidth = (int)(100 * scale);
+        int pad = (int)(10 * scale), top = (int)(8 * scale), rowHeight = (int)(21 * scale), statusWidth = (int)(70 * scale);
         for (int i = 0; i < 2; i++)
         {
             var row = rows[i]; var flags = TextFormatFlags.NoPadding | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis;

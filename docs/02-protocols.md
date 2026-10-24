@@ -36,3 +36,11 @@
 设备热插拔和恢复广播触发 1.8 秒去抖刷新；每次查询打开并关闭句柄，不保留失效的 USB 句柄。常驻程序的主线程不直接调用可能阻塞的厂商 HID 函数。未采用内核驱动、进程注入、内存读取或固件修改。
 
 Microsoft 参考：[集合能力](https://learn.microsoft.com/en-us/windows-hardware/drivers/hid/collection-capability)、[HidD_GetFeature](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/hidsdi/nf-hidsdi-hidd_getfeature)、[解析报告](https://learn.microsoft.com/en-us/windows-hardware/drivers/hid/interpreting-hid-reports)。
+
+## v1.2.0 闲置保护
+
+GET_DEVICE_INFO 是查询命令，没有发送设置、灯光、休眠时间或持久化命令；但不能据此推断查询绝不会唤醒无线设备。旧版每 60 秒轮询，可能重置固件的闲置倒计时。未验证固件具体行为，不声称已恢复或改动过硬件参数。
+
+新版通过 Windows Raw Input 键盘活动通知维护 30 秒窗口，只更新时间戳，不解析按键数据。窗口外连查询 Provider 都不会调用，启动、热插拔及系统恢复也不主动查询闲置键盘。worker 在鼠标查询后、键盘通信前再次核验截止时间，防止延迟启动把过期查询发出去。闲置时清除当前百分比、显示“待使用”。手动“立即刷新”开放 30 秒查询窗口，可能唤醒设备。CLI `--diagnose` 默认不主动查询键盘。
+
+参考：[Raw Input](https://learn.microsoft.com/en-us/windows/win32/inputdev/using-raw-input)、[Shell v4 工具提示标志](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ns-shellapi-notifyicondataw)。固定 GUID 的原生 Shell v4 图标取代 WinForms NotifyIcon，以显式关闭标准提示并处理自定义浮层，防止两套提示重叠。

@@ -51,7 +51,8 @@ internal static class Storage
 
 internal static class WorkerClient
 {
-    internal static async Task<Snapshot> ReadAsync(AppSettings settings, CancellationToken ct)
+    internal sealed record Request(AppSettings Settings, DateTimeOffset? KeyboardQueryUntil);
+    internal static async Task<Snapshot> ReadAsync(AppSettings settings, CancellationToken ct, DateTimeOffset? keyboardQueryUntil = null)
     {
         Directory.CreateDirectory(Storage.Root);
         string output = Path.Combine(Storage.Root, "probe-" + Guid.NewGuid().ToString("N") + ".json");
@@ -59,7 +60,7 @@ internal static class WorkerClient
         Process? worker = null;
         try
         {
-            await File.WriteAllTextAsync(input, JsonSerializer.Serialize(settings, Json.Options), ct);
+            await File.WriteAllTextAsync(input, JsonSerializer.Serialize(new Request(settings, keyboardQueryUntil), Json.Options), ct);
             var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };
             start.ArgumentList.Add("--worker"); start.ArgumentList.Add(output); start.ArgumentList.Add(input);
             worker = Process.Start(start) ?? throw new IOException("无法启动 HID 查询进程");

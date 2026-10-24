@@ -12,8 +12,8 @@ internal static class Program
         {
             try
             {
-                var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(args[2]), Json.Options) ?? new();
-                var snapshot = Probe.RunAsync(settings, CancellationToken.None).GetAwaiter().GetResult();
+                var request = JsonSerializer.Deserialize<WorkerClient.Request>(File.ReadAllText(args[2]), Json.Options) ?? throw new IOException("查询请求为空");
+                var snapshot = Probe.RunAsync(request.Settings, CancellationToken.None, request.KeyboardQueryUntil).GetAwaiter().GetResult();
                 File.WriteAllText(args[1], JsonSerializer.Serialize(snapshot, Json.Options)); return 0;
             }
             catch (Exception ex) { Storage.Log("查询进程: " + ex); return 1; }

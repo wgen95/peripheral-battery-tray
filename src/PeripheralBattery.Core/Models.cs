@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace PeripheralBattery.Core;
 
-public enum BatteryState { Valid, Unknown, Disconnected, WirelessDisconnected, Sleeping, ReadFailed, Unsupported, LowBatteryWarning }
+public enum BatteryState { Valid, Unknown, Disconnected, WirelessDisconnected, Sleeping, ReadFailed, Unsupported, LowBatteryWarning, Idle }
 public sealed record Reading(string Name, string Category, BatteryState State, int? Percent,
     string Method, string Detail, DateTimeOffset AttemptedAt, string? ReceiverKey = null, string? RawFrame = null)
 {
@@ -13,6 +13,7 @@ public sealed record Reading(string Name, string Category, BatteryState State, i
         BatteryState.Disconnected => "接收器断连",
         BatteryState.WirelessDisconnected => "设备断连",
         BatteryState.Sleeping => "休眠中",
+        BatteryState.Idle => "待使用",
         BatteryState.ReadFailed => "读取失败",
         BatteryState.Unsupported => "暂不支持",
         BatteryState.LowBatteryWarning => "低电量警告",

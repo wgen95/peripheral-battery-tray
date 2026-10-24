@@ -114,12 +114,22 @@ public sealed class XinmengS75Provider : IBatteryProvider
 
 public static class Probe
 {
-    public static async Task<Snapshot> RunAsync(AppSettings settings, CancellationToken ct)
+    public static async Task<Snapshot> RunAsync(AppSettings settings, CancellationToken ct, DateTimeOffset? keyboardQueryUntil = null)
     {
         var devices = HidDiscovery.Enumerate();
         // Sequential queries avoid competing with another collection/device's response channel.
         var mouse = await new DareuA950Provider().ReadAsync(devices, settings.MouseReceiver, ct);
-        var keyboard = await new XinmengS75Provider().ReadAsync(devices, settings.KeyboardReceiver, ct);
+        var keyboard = await ReadKeyboardAsync(devices, settings.KeyboardReceiver, keyboardQueryUntil, ct);
         return new(DateTimeOffset.Now, devices, mouse, keyboard);
+    }
+    public static Task<Reading> ReadKeyboardAsync(List<HidDevice> devices, string? receiver,
+        DateTimeOffset? queryUntil, CancellationToken ct, IBatteryProvider? provider = null)
+    {
+        // Check immediately before HID I/O, after the mouse query / worker startup.
+        // Idle receivers receive NO output report, including during startup/resume.
+        if (!(queryUntil > DateTimeOffset.Now))
+            return Task.FromResult(Reading.Empty("S75", "键盘", BatteryState.Idle,
+                "键盘闲置，已停止主动查询以免干扰熄灯和休眠。按键后自动恢复；此状态不代表已确认硬件休眠。"));
+        return (provider ?? new XinmengS75Provider()).ReadAsync(devices, receiver, ct);
     }
 }

@@ -35,22 +35,40 @@ internal static class Program
         using (var shot = new Bitmap(settings.Width, settings.Height)) { settings.DrawToBitmap(shot, new Rectangle(Point.Empty, settings.Size)); shot.Save(Path.Combine(Path.GetDirectoryName(path)!, "settings-preview.png")); }
         settings.Close();
         using var context = new TrayContext(false, false, false, startMonitoring: false); Application.DoEvents();
-        var tray = (NotifyIcon)typeof(TrayContext).GetField("tray", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(context)!;
-        var window = (NativeWindow)typeof(NotifyIcon).GetField("_window", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(tray)!;
-        uint uid = Convert.ToUInt32(typeof(NotifyIcon).GetField("_id", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(tray));
-        var id = new Identifier { Size = (uint)Marshal.SizeOf<Identifier>(), Hwnd = window.Handle, Id = uid };
+        var tray = (TrayIcon)typeof(TrayContext).GetField("tray", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(context)!;
+        var id = new Identifier { Size = (uint)Marshal.SizeOf<Identifier>(), Hwnd = tray.Handle, Id = 1, Guid = TrayIcon.Identity };
         int result = Shell_NotifyIconGetRect(ref id, out var rect);
         if (result != 0) throw new Exception($"Shell tray icon not registered: {result:X8}");
-        var click = typeof(NotifyIcon).GetMethod("OnMouseClick", BindingFlags.NonPublic | BindingFlags.Instance)!;
         var trayPopup = (BatteryPopup)typeof(TrayContext).GetField("popup", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(context)!;
-        click.Invoke(tray, [new MouseEventArgs(MouseButtons.Left, 1, 0, 0, 0)]); Application.DoEvents();
+        if (tray.ShowNativeTip) throw new Exception("native tooltip would overlap custom hover panel");
+        tray.Dispatch(0x400, Cursor.Position); Application.DoEvents();
         if (!trayPopup.Visible) throw new Exception("left click did not open popup");
-        click.Invoke(tray, [new MouseEventArgs(MouseButtons.Left, 1, 0, 0, 0)]); Application.DoEvents();
+        tray.Dispatch(0x400, Cursor.Position); Application.DoEvents();
         if (trayPopup.Visible || !tray.Visible) throw new Exception("close popup stopped background tray");
+        tray.Dispatch(0x201, new Point(20, 20)); tray.Dispatch(0x200, new Point(80, 80)); tray.Dispatch(0x400, new Point(80, 80));
+        Application.DoEvents();
+        if (trayPopup.Visible) throw new Exception("drag opened a popup / blocked moving the tray icon");
+        tray.Dispatch(0x401, Cursor.Position); Application.DoEvents();
+        if (!trayPopup.Visible) throw new Exception("keyboard activation did not open panel");
+        trayPopup.Dismiss();
+        tray.Dispatch(0x200, Cursor.Position); tray.Dispatch(0x406, Cursor.Position);
+        var hoverDeadline = DateTime.UtcNow.AddMilliseconds(650);
+        while (DateTime.UtcNow < hoverDeadline) { Application.DoEvents(); Thread.Sleep(10); }
+        if (!trayPopup.Visible || tray.ShowNativeTip) throw new Exception("Shell hover did not show exactly the custom panel");
+        trayPopup.Dismiss(); tray.Dispatch(0x407, Cursor.Position);
+        var appSettings = (AppSettings)typeof(TrayContext).GetField("settings", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(context)!;
+        appSettings.HoverPanel = false; tray.ShowNativeTip = true;
+        tray.Dispatch(0x401, Cursor.Position); Application.DoEvents();
+        if (tray.ShowNativeTip) throw new Exception("native tooltip overlaps a clicked panel when hover mode is disabled");
+        trayPopup.Dismiss();
+        if (!tray.ShowNativeTip) throw new Exception("native fallback tooltip was not restored");
         var menu = (ContextMenuStrip)typeof(TrayContext).GetField("menu", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(context)!;
+        tray.Dispatch(0x7B, Cursor.Position); Application.DoEvents();
+        if (!menu.Visible) throw new Exception("native context-menu callback did not open menu");
+        menu.Close();
         ((ToolStripMenuItem)menu.Items.Cast<ToolStripItem>().Single(i => i.Text == "设备诊断")).PerformClick(); Application.DoEvents();
         var diagnosticWindow = (DiagnosticsForm)typeof(TrayContext).GetField("diagnostics", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(context)!;
         diagnosticWindow.Close(); typeof(TrayContext).GetMethod("Render", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(context, null);
-        Console.WriteLine($"PASS: 50 popup cycles, stable HWND, screen bounds, empty/full diagnostic UI, settings UI, native Shell tray registration, synthetic left-click/menu events and refresh after diagnostic close. Preview {bitmap.Width}x{bitmap.Height}. Real readings: {snapshot.Mouse.Display} / {snapshot.Keyboard.Display}.");
+        Console.WriteLine($"PASS: 50 popup cycles, stable HWND, screen bounds, diagnostic/settings UI, GUID Shell registration, click/hover/context-menu callbacks, tooltip exclusivity, drag suppression and refresh after diagnostic close. Preview {bitmap.Width}x{bitmap.Height}. Real readings: {snapshot.Mouse.Display} / {snapshot.Keyboard.Display}.");
     }
 }

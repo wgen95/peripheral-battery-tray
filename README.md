@@ -1,23 +1,26 @@
 # 无线外设电量 · Peripheral Battery
 
-轻量的 Windows 托盘工具，独立查询 **达尔优 A950** 和 **新盟 S75** 的 2.4GHz 接收器电量。C# / .NET 8 / WinForms / Windows 原生 HID API，无浏览器、无厂商后台依赖，无运行时第三方 NuGet 包。
+轻量的 Windows 原生托盘工具，独立查询 **达尔优 A950** 和 **新盟 S75** 的 2.4GHz 接收器电量。C# / .NET 8 / WinForms / Windows 原生 HID API，无浏览器、无厂商后台依赖，无运行时第三方 NuGet 包。
 
 ![真实设备读取后的紧凑浮层](docs/images/panel.png)
 
 > 图示为实机采样的 UI 渲染；设备休眠或断连时不显示旧百分比。首次硬件验证：A950 50%，S75 57%，后续 S75 56%。这些是测试时的读数，不是固定展示数据。
 
-推荐下载 [Windows 安装程序](https://github.com/wgen95/peripheral-battery-tray/releases/download/v1.1.1/PeripheralBattery-1.1.1-Setup-x64.exe)，双击安装后即可从开始菜单打开。也可下载 [免安装 ZIP](https://github.com/wgen95/peripheral-battery-tray/releases/download/v1.1.1/PeripheralBattery-1.1.1-win-x64.zip)。两种版本都自带 .NET；正常运行无需联网、管理员权限或替换设备驱动，默认不开机自启。
+推荐下载 [Windows 安装程序](https://github.com/wgen95/peripheral-battery-tray/releases/download/v1.2.0/PeripheralBattery-1.2.0-Setup-x64.exe)，双击安装后即可从开始菜单打开。也可下载 [免安装 ZIP](https://github.com/wgen95/peripheral-battery-tray/releases/download/v1.2.0/PeripheralBattery-1.2.0-win-x64.zip)。两种版本都自带 .NET；正常运行无需联网、管理员权限或替换设备驱动，默认不开机自启。
+
+**省电说明：**旧版每分钟主动查询 S75，虽然没有修改键盘设置，但可能干扰固件闲置倒计时。v1.2.0 改为闲置时不查询键盘。Windows 键盘活动通知只保留活动时间，不读取、保存或上传按键内容；无键盘活动通知时保持暂停查询。
 
 安装版默认位于 `%LOCALAPPDATA%/Programs/PeripheralBattery`，提供开始菜单入口和可选桌面快捷方式。在 Windows **设置 → 应用 → 已安装的应用 → 无线外设电量 → 卸载** 即可删除。卸载会正常退出程序，并清理程序文件、快捷方式、自启动项、配置、日志及本应用的 .NET 解包缓存。覆盖安装可以升级。安装包尚未进行代码签名。
 
-浮层只显示 `A950`、`S75` 和各自电量 / 状态，设备名称仅含字母与数字。面板为 180×68 逻辑像素。
+浮层只显示 `A950`、`S75` 和各自电量 / 状态，设备名称仅含字母与数字。面板为 136×58 逻辑像素。
 
 - 左键托盘图标：打开 / 收起深色两行面板；点外部或按 Esc 收起。
 - 鼠标悬停：紧凑浮层；可在设置中关闭，保留原生电量摘要。
 - 右键：显示电量、立即刷新、设备诊断、设置、查看日志、退出。
-- 默认每 60 秒查询；可设 15–600 秒。接收器插拔与系统唤醒后延迟刷新。
+- 鼠标默认每 60 秒查询；可设 15–600 秒。S75 仅在检测到键盘活动后的 30 秒窗口内查询，闲置后停止主动通信，显示“待使用”，不把它误称为硬件休眠，也不展示旧百分比。启动、USB 重插及系统恢复不会主动唤醒闲置键盘。
+- “立即刷新”属于主动查询，可能唤醒设备；悬停 / 点击查看面板不会发出额外查询。
 - 低于阈值时数字变色。关闭浮层或诊断窗口继续后台运行。
-- 托盘图标可能被 Windows 收纳在 `^` 中，可手动拖到可见区域。
+- 同心圆环托盘图标可能被 Windows 收纳在 `^` 中，可按住拖到时钟附近的可见区域。拖动期间不会弹出浮层；固定 GUID 用于让 Windows 记住放置选择。
 
 ## 已验证设备
 
@@ -49,7 +52,7 @@ dotnet run --project tests/PeripheralBattery.Tests
 # 真实硬件诊断（本机信息写入指定文件）
 New-Item -ItemType Directory -Force evidence
 dotnet run --project tests/PeripheralBattery.Tests -- --hardware evidence/probe.json
-# WinForms 集成测试：真实硬件、50 次浮层开关、Shell 托盘注册、图片渲染
+# WinForms 集成测试：鼠标实测、键盘闲置保护、50 次浮层开关、Shell 托盘注册、图片渲染
 dotnet run --project tests/PeripheralBattery.UiTests -c Release -- evidence/panel.png
 ```
 
