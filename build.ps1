@@ -6,6 +6,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
     & $Dotnet run --project tests/PeripheralBattery.Tests -c Release
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
+    & $Dotnet run --project tests/PeripheralBattery.IconTests -c Release -- evidence/tray-rings-preview.png
+    if ($LASTEXITCODE -ne 0) { throw 'Tray icon tests failed' }
     & $Dotnet publish src/PeripheralBattery.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=None -o dist/win-x64
     if ($LASTEXITCODE -ne 0) { throw 'Publish failed' }
     Copy-Item README.md,LICENSE,THIRD-PARTY-NOTICES.md -Destination dist/win-x64

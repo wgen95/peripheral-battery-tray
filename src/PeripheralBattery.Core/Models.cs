@@ -39,6 +39,7 @@ public sealed class AppSettings
     public int PollSeconds { get; set; } = 60;
     public int LowThreshold { get; set; } = 20;
     public bool HoverPanel { get; set; } = true;
+    public bool KeyboardOuterRing { get; set; } = true;
     public string? MouseReceiver { get; set; }
     public string? KeyboardReceiver { get; set; }
 }

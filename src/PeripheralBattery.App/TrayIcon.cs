@@ -10,7 +10,7 @@ internal sealed class TrayIcon : NativeWindow, IDisposable
     internal static readonly Guid Identity = new("6319a943-4e29-4c5e-a8da-a0e018535da5");
     private const int Callback = 0x8001;
     private readonly uint taskbarCreated = RegisterWindowMessage("TaskbarCreated");
-    private readonly Icon icon;
+    private Icon icon;
     private bool visible, registered, disposed, nativeTip;
     private Point? pressPoint;
     private bool dragged;
@@ -26,6 +26,22 @@ internal sealed class TrayIcon : NativeWindow, IDisposable
         set { nativeTip = value; Modify(); }
     }
     internal string Text { get => text; set { text = value.Length > 127 ? value[..127] : value; Modify(); } }
+    // Own the replacement only after Shell has accepted it; keep HWND/GUID intact.
+    internal void SetIcon(Icon replacement)
+    {
+        var previous = icon;
+        icon = replacement;
+        if (registered)
+        {
+            var data = Data(); data.Flags = 2 | 0x20; // NIF_ICON | NIF_GUID only
+            if (!Shell_NotifyIcon(1, ref data))
+            {
+                icon = previous; replacement.Dispose();
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "托盘图标更新失败");
+            }
+        }
+        previous.Dispose();
+    }
     internal bool Visible
     {
         get => visible;

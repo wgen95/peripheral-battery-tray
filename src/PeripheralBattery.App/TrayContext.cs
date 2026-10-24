@@ -1,4 +1,3 @@
-using System.Drawing.Drawing2D;
 using PeripheralBattery.Core;
 
 namespace PeripheralBattery.App;
@@ -24,13 +23,15 @@ internal sealed class TrayContext : ApplicationContext
     private readonly Dictionary<string, Reading> history = new();
     private Point hoverPoint;
     private DateTimeOffset? manualKeyboardUntil;
+    private BatteryRings renderedRings;
     private bool closing, suspended, disposed;
 
     internal TrayContext(bool show, bool showDiagnostics, bool showSettings, bool startMonitoring = true)
     {
-        Storage.Log("启动 v1.2.0 · 闲置键盘停止查询");
+        Storage.Log("启动 v1.3.0 · 双环电量图标");
         popup.LowThreshold = settings.LowThreshold;
-        tray = new TrayIcon(CreateIcon()) { Text = "A950 · S75", ContextMenu = menu, ShowNativeTip = !settings.HoverPanel };
+        renderedRings = BatteryRings.From(current.Mouse, current.Keyboard, settings);
+        tray = new TrayIcon(BatteryTrayRenderer.Create(renderedRings)) { Text = "A950 · S75", ContextMenu = menu, ShowNativeTip = !settings.HoverPanel };
         popup.VisibleChanged += (_, _) => tray.ShowNativeTip = !settings.HoverPanel && !popup.Visible;
         menu.Items.Add("显示电量", null, (_, _) => ShowPopup(true));
         menu.Items.Add("立即刷新", null, (_, _) => { manualKeyboardUntil = DateTimeOffset.Now + KeyboardActivity.ActiveWindow; RequestRefresh(); });
@@ -139,6 +140,11 @@ internal sealed class TrayContext : ApplicationContext
     private void Render()
     {
         popup.SetReadings(current.Mouse, current.Keyboard);
+        var rings = BatteryRings.From(current.Mouse, current.Keyboard, settings);
+        if (rings != renderedRings)
+        {
+            tray.SetIcon(BatteryTrayRenderer.Create(rings)); renderedRings = rings;
+        }
         string tip = $"{current.Mouse.Name} {current.Mouse.Display}\n{current.Keyboard.Name} {current.Keyboard.Display}";
         tray.Text = tip.Length > 63 ? tip[..63] : tip;
         if (diagnostics is { IsDisposed: false }) diagnostics.UpdateSnapshot(current, history);
@@ -157,7 +163,7 @@ internal sealed class TrayContext : ApplicationContext
         settingsForm = new SettingsForm(settings, current.Devices, updated =>
         {
             settings = updated; poll.Interval = settings.PollSeconds * 1000; popup.LowThreshold = settings.LowThreshold;
-            tray.ShowNativeTip = !settings.HoverPanel && !popup.Visible; popup.Invalidate(); RequestRefresh();
+            tray.ShowNativeTip = !settings.HoverPanel && !popup.Visible; Render(); RequestRefresh();
         });
         settingsForm.Show();
     }
@@ -167,20 +173,6 @@ internal sealed class TrayContext : ApplicationContext
         closing = true; poll.Stop(); debounce.Stop(); hover.Stop(); idle.Stop(); tray.Visible = false; popup.Dismiss(); lifetime.Cancel();
         if (scan != null) await scan;
         Storage.Log("正常退出，查询任务已结束"); ExitThread();
-    }
-    private static Icon CreateIcon()
-    {
-        using var bitmap = new Bitmap(64, 64);
-        using var g = Graphics.FromImage(bitmap); g.SmoothingMode = SmoothingMode.AntiAlias;
-        using var shadow = new Pen(Color.FromArgb(160, 35, 35, 38), 5.5f);
-        using var outline = new Pen(Color.FromArgb(245, 245, 247), 2.8f);
-        foreach (var r in new[] { new RectangleF(8, 8, 48, 48), new RectangleF(22, 22, 20, 20) })
-        {
-            g.DrawEllipse(shadow, r); g.DrawEllipse(outline, r);
-        }
-        var handle = bitmap.GetHicon();
-        try { using var icon = Icon.FromHandle(handle); return (Icon)icon.Clone(); }
-        finally { NativeUi.DestroyIcon(handle); }
     }
     protected override void Dispose(bool disposing)
     {
