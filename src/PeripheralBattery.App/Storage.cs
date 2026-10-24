@@ -16,7 +16,9 @@ internal static class Storage
         try
         {
             var s = File.Exists(SettingsPath) ? JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath), Json.Options) ?? new() : new();
-            s.PollSeconds = Math.Clamp(s.PollSeconds, 15, 600); s.LowThreshold = Math.Clamp(s.LowThreshold, 1, 50); return s;
+            s.PollSeconds = Math.Clamp(s.PollSeconds, 15, 600); s.LowThreshold = Math.Clamp(s.LowThreshold, 1, 50);
+            if (!Enum.IsDefined(s.ColorTheme)) s.ColorTheme = TrayColorTheme.Monochrome;
+            return s;
         }
         catch (Exception e) { Log("设置读取失败，使用默认值: " + e.Message); return new(); }
     }

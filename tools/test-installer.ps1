@@ -1,7 +1,7 @@
 param([string]$SetupPath = '', [string]$TestDirectory = '')
 $ErrorActionPreference = 'Stop'
 $project = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-if (-not $SetupPath) { $SetupPath = Join-Path $project 'dist/PeripheralBattery-1.3.0-Setup-x64.exe' }
+if (-not $SetupPath) { $SetupPath = Join-Path $project 'dist/PeripheralBattery-1.4.0-Setup-x64.exe' }
 if (-not $TestDirectory) { $TestDirectory = Join-Path $project 'evidence/install-smoke' }
 $target = [IO.Path]::GetFullPath($TestDirectory)
 $safePrefix = [IO.Path]::GetFullPath((Join-Path $project 'evidence')) + [IO.Path]::DirectorySeparatorChar
@@ -34,7 +34,7 @@ Run-AndWait $SetupPath $setupArgs
 $installed = Join-Path $target 'PeripheralBattery.exe'
 $uninstaller = Join-Path $target 'unins000.exe'
 $registration = Get-ItemProperty -LiteralPath $registry
-if ($registration.DisplayVersion -ne '1.3.0' -or $registration.InstallLocation.TrimEnd('\') -ne $target) { throw 'Incorrect application registration.' }
+if ($registration.DisplayVersion -ne '1.4.0' -or $registration.InstallLocation.TrimEnd('\') -ne $target) { throw 'Incorrect application registration.' }
 if (-not (Test-Path -LiteralPath $installed) -or -not (Test-Path -LiteralPath $shortcut) -or -not (Test-Path -LiteralPath $desktop)) { throw 'Missing installed app or shortcuts.' }
 # Check the actual MS-SHLLINK payload. WScript.Shell returns empty shortcut
 # properties on the hosted Server image even though the .lnk file exists.

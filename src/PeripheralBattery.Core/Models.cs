@@ -34,12 +34,14 @@ public sealed record HidDevice(string Path, string InstanceId, string ReceiverKe
     public override string ToString() => $"{Product} · {Id} · {UsagePage:X4}:{Usage:X4}";
 }
 public sealed record Snapshot(DateTimeOffset CapturedAt, List<HidDevice> Devices, Reading Mouse, Reading Keyboard);
+public enum TrayColorTheme { Monochrome, Teal, Blue, Green, Purple, Orange }
 public sealed class AppSettings
 {
     public int PollSeconds { get; set; } = 60;
     public int LowThreshold { get; set; } = 20;
     public bool HoverPanel { get; set; } = true;
     public bool KeyboardOuterRing { get; set; } = true;
+    public TrayColorTheme ColorTheme { get; set; } = TrayColorTheme.Monochrome;
     public string? MouseReceiver { get; set; }
     public string? KeyboardReceiver { get; set; }
 }

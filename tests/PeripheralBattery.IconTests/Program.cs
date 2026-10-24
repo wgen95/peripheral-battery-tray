@@ -18,6 +18,12 @@ Check(swapped.Outer.Percent == 75 && swapped.Inner.Percent == 25, "swapped outer
 Check(JsonSerializer.Deserialize<AppSettings>("{}", Json.Options)!.KeyboardOuterRing, "old settings preserve default keyboard outer");
 Check(!JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(settings, Json.Options), Json.Options)!.KeyboardOuterRing,
     "ring order survives settings serialization");
+Check(JsonSerializer.Deserialize<AppSettings>("{}", Json.Options)!.ColorTheme == TrayColorTheme.Monochrome,
+    "old settings default to monochrome");
+var paletteSettings = new AppSettings { ColorTheme = TrayColorTheme.Purple };
+Check(JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(paletteSettings, Json.Options), Json.Options)!.ColorTheme == TrayColorTheme.Purple,
+    "palette survives settings serialization");
+Check(BatteryRings.From(mouse, keyboard, paletteSettings) != normal, "palette changes invalidate the rendered icon cache");
 Check(BatteryRing.From(Value("A950", 20), 20).Low, "threshold boundary is low");
 Check(!BatteryRing.From(Value("A950", 21), 20).Low, "above threshold is normal");
 Check(BatteryRing.From(Value("A950", 30), 40).Low, "custom threshold is used");
@@ -33,17 +39,35 @@ Color At(Bitmap image, double radius, double degrees)
 }
 using (var image = BatteryTrayRenderer.Draw(normal))
 {
-    Check(Near(At(image, 27, 45), BatteryTrayRenderer.Normal), "outer remaining quarter is colored");
+    Check(Near(At(image, 27, 0), BatteryTrayRenderer.Normal), "outer remaining quarter is centered at top");
     Check(Near(At(image, 27, 135), BatteryTrayRenderer.Consumed), "outer consumed arc is white");
-    Check(Near(At(image, 14, 225), BatteryTrayRenderer.Normal), "inner three-quarter progress is independent");
-    Check(Near(At(image, 14, 315), BatteryTrayRenderer.Consumed), "inner consumed arc is white");
+    Check(Near(At(image, 14, 90), BatteryTrayRenderer.Normal), "inner three-quarter progress is independent");
+    Check(Near(At(image, 14, 180), BatteryTrayRenderer.Consumed), "inner consumed arc is centered at bottom");
     Check(image.GetPixel(32, 32).A == 0 && image.GetPixel(32, 11).A == 0, "center and gap stay transparent");
 }
 using (var image = BatteryTrayRenderer.Draw(new(new(10, true), new(100, false))))
 {
-    Check(Near(At(image, 27, 15), BatteryTrayRenderer.Low), "low outer arc is red");
+    Check(Near(At(image, 27, 0), BatteryTrayRenderer.Low), "low outer arc is red");
     Check(Near(At(image, 27, 180), BatteryTrayRenderer.Consumed), "low consumed arc stays white");
     Check(Near(At(image, 14, 180), BatteryTrayRenderer.Normal), "one low battery does not turn the other ring red");
+}
+foreach (var theme in Enum.GetValues<TrayColorTheme>())
+{
+    using var image = BatteryTrayRenderer.Draw(new(new(50, false), new(25, true), theme));
+    foreach (double angle in new[] { 45d, 315d })
+        Check(Near(At(image, 27, angle), BatteryTrayRenderer.NormalColor(theme)), "normal half stays on both upper quadrants for every palette");
+    foreach (double angle in new[] { 135d, 225d })
+        Check(Near(At(image, 27, angle), BatteryTrayRenderer.Consumed), "white half stays on both lower quadrants for every palette");
+    Check(Near(At(image, 14, 0), BatteryTrayRenderer.Low), "red overrides every selected palette for a low device");
+}
+foreach (int percent in new[] { 10, 25, 50, 75, 90 })
+{
+    using var image = BatteryTrayRenderer.Draw(new(new(percent, false), new(percent, false)));
+    foreach (int radius in new[] { 14, 27 })
+    {
+        Check(Near(At(image, radius, 0), BatteryTrayRenderer.Normal), "remaining arc stays centered at top as the level changes");
+        Check(Near(At(image, radius, 180), BatteryTrayRenderer.Consumed), "consumed arc stays centered at bottom as the level changes");
+    }
 }
 using (var image = BatteryTrayRenderer.Draw(new(new(0, true), new(100, false))))
 {
@@ -107,6 +131,8 @@ var settingsThread = new Thread(() =>
         using var form = new SettingsForm(settings, [], _ => throw new Exception("preview must not save user settings"));
         var order = (ComboBox)form.Controls.Find("RingOrder", true).Single();
         Check(order.SelectedIndex == 1 && order.Items.Count == 2, "settings UI reflects swapped device order");
+        var colors = (ComboBox)form.Controls.Find("TrayColors", true).Single();
+        Check(colors.SelectedIndex == 0 && colors.Items.Count == 6, "settings UI exposes six palettes with monochrome default");
         // Render offscreen. Do not Show(), run the app, or change the installed tray.
         // A never-shown Form omits invisible children in DrawToBitmap. Render its
         // detached layout instead, with the same font and client dimensions.
@@ -116,6 +142,7 @@ var settingsThread = new Thread(() =>
         foreach (Control control in layout.Controls) control.CreateControl();
         layout.PerformLayout();
         Check(layout.ClientRectangle.Contains(order.Bounds), "device order selector fits in the settings layout");
+        Check(layout.ClientRectangle.Contains(colors.Bounds), "palette selector fits in the settings layout");
         Check(layout.ClientRectangle.Contains(((Control)form.AcceptButton!).Bounds), "save button fits in the settings layout");
         using var image = new Bitmap(layout.Width, layout.Height);
         layout.DrawToBitmap(image, layout.ClientRectangle);

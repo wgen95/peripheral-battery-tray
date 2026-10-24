@@ -6,7 +6,7 @@
 
 > 图示为实机采样的 UI 渲染；设备休眠或断连时不显示旧百分比。首次硬件验证：A950 50%，S75 57%，后续 S75 56%。这些是测试时的读数，不是固定展示数据。
 
-推荐下载 [Windows 安装程序](https://github.com/wgen95/peripheral-battery-tray/releases/download/v1.3.0/PeripheralBattery-1.3.0-Setup-x64.exe)，双击安装后即可从开始菜单打开。也可下载 [免安装 ZIP](https://github.com/wgen95/peripheral-battery-tray/releases/download/v1.3.0/PeripheralBattery-1.3.0-win-x64.zip)。两种版本都自带 .NET；正常运行无需联网、管理员权限或替换设备驱动，默认不开机自启。
+推荐下载 [Windows 安装程序](https://github.com/wgen95/peripheral-battery-tray/releases/download/v1.4.0/PeripheralBattery-1.4.0-Setup-x64.exe)，双击安装后即可从开始菜单打开。安装程序自带 .NET；正常运行无需联网、管理员权限或替换设备驱动，默认不开机自启。
 
 **省电说明：**旧版每分钟主动查询 S75，虽然没有修改键盘设置，但可能干扰固件闲置倒计时。v1.2.0 改为闲置时不查询键盘。Windows 键盘活动通知只保留活动时间，不读取、保存或上传按键内容；无键盘活动通知时保持暂停查询。
 
@@ -20,7 +20,7 @@
 - 鼠标默认每 60 秒查询；可设 15–600 秒。S75 仅在检测到键盘活动后的 30 秒窗口内查询，闲置后停止主动通信，显示“待使用”，不把它误称为硬件休眠，也不展示旧百分比。启动、USB 重插及系统恢复不会主动唤醒闲置键盘。
 - “立即刷新”属于主动查询，可能唤醒设备；悬停 / 点击查看面板不会发出额外查询。
 - 低于阈值时数字变色。关闭浮层或诊断窗口继续后台运行。
-- 双环托盘默认外环 S75、内环 A950，在设置的“内外环设备”中可对调，保存后立即生效。12 点起顺时针填充：青绿色代表剩余电量，白色代表已消耗；达到设置中的低电量阈值时，对应环变红。0% 以白色空环和细红边表示。
+- 双环托盘默认外环 S75、内环 A950，在设置的“内外环设备”中可对调，保存后立即生效。默认黑白配：黑色代表剩余电量，白色代表已消耗；白色消耗弧以 6 点钟方向为中心，两侧对称变化。设置中的“托盘配色”可切换黑白、青绿 / 白、蓝 / 白、绿 / 白、紫 / 白、橙 / 白，保存后立即生效。达到设置中的低电量阈值时，对应环变红。0% 以白色空环和细红边表示。
 - 没有有效电量（含闲置、断连、读取失败）时，对应环显示灰色虚线，不沿用旧读数。
 - 图标可能被 Windows 收纳在 `^` 中，可通过任务栏设置选择常驻显示。拖动期间不会弹出浮层；固定 GUID 保持不变。
 
@@ -43,14 +43,14 @@
 需要 Windows 10/11 x64、.NET 8 SDK（8.0.400 或更新的 8.0 SDK）。
 
 ```powershell
-./build.ps1
+./build.ps1 -Installer
 # SDK 不在 PATH 时：
-./build.ps1 -Dotnet 'C:/path/to/dotnet.exe'
+./build.ps1 -Installer -Dotnet 'C:/path/to/dotnet.exe'
 # 同时生成安装程序（需 Inno Setup 6.3+）
 ./build.ps1 -Installer -Iscc 'C:/path/to/ISCC.exe'
 
-# 仅运行
-dotnet run --project src/PeripheralBattery.App
+# 已有安装版的本机升级验证（不启动应用，不运行便携版）
+./tools/test-installed-upgrade.ps1
 # 协议与状态测试（无需硬件）
 dotnet run --project tests/PeripheralBattery.Tests
 # 真实硬件诊断（本机信息写入指定文件）
@@ -60,7 +60,7 @@ dotnet run --project tests/PeripheralBattery.Tests -- --hardware evidence/probe.
 dotnet run --project tests/PeripheralBattery.UiTests -c Release -- evidence/panel.png
 ```
 
-自包含单文件发布因附带运行时而比源码 / 依赖框架版本大，首次启动也需要解包原生库；实际大小见 Release。保留压缩包内文档及许可证。
+自包含单文件发布因附带运行时而比源码 / 依赖框架版本大，首次启动也需要解包原生库；实际大小见 Release。发行包仅提供安装程序和 SHA256SUMS.txt。本机应用验证统一覆盖安装，不运行发布暂存目录中的可执行文件。
 
 CLI（WinExe 不输出控制台，诊断请读取 JSON 或日志）：
 

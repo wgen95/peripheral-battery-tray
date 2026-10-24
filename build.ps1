@@ -13,9 +13,7 @@ try {
     Copy-Item README.md,LICENSE,THIRD-PARTY-NOTICES.md -Destination dist/win-x64
     Copy-Item docs -Destination dist/win-x64 -Recurse -Force
     $version = ([xml](Get-Content src/PeripheralBattery.App/PeripheralBattery.App.csproj -Raw)).Project.PropertyGroup.Version
-    $zip = "dist/PeripheralBattery-$version-win-x64.zip"
-    Compress-Archive -Path dist/win-x64/* -DestinationPath $zip -Force
-    $assets = @(Get-Item $zip)
+    $assets = @()
     if ($Installer) {
         if (-not $Iscc) {
             $found = Get-Command ISCC.exe -ErrorAction SilentlyContinue
@@ -30,6 +28,10 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
         $assets += Get-Item "dist/PeripheralBattery-$version-Setup-x64.exe"
     }
+    else {
+        Write-Output 'Build output is staging only. Use -Installer for the installable application.'
+    }
+    if ($assets.Count -eq 0) { return }
     $assets | ForEach-Object {
         $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         "$hash  $($_.Name)"

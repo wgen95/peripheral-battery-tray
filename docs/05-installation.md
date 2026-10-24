@@ -1,6 +1,6 @@
 # 安装与卸载
 
-从 [v1.3.0 Release](https://github.com/wgen95/peripheral-battery-tray/releases/tag/v1.3.0) 下载 `PeripheralBattery-1.3.0-Setup-x64.exe`，双击按中文向导安装。无需单独安装 .NET，也不要求管理员权限。
+从 [v1.4.0 Release](https://github.com/wgen95/peripheral-battery-tray/releases/tag/v1.4.0) 下载 `PeripheralBattery-1.4.0-Setup-x64.exe`，双击按中文向导安装。无需单独安装 .NET，也不要求管理员权限。
 
 - 默认安装到当前用户的 `%LOCALAPPDATA%/Programs/PeripheralBattery`。
 - 自动添加“无线外设电量”开始菜单入口，可以自行勾选桌面快捷方式。
@@ -19,6 +19,6 @@
 
 只清理这些应用专用目录，不删除整个临时目录、.NET 缓存根目录或其他软件的数据。用户自行保存到其他位置的诊断导出、下载的安装包及源码不会被删除。安装包默认不生成持久安装日志，开发测试通过显式 `/LOG` 生成的日志留在项目的 `evidence/` 中。
 
-安装包为本项目自行构建，尚未代码签名。Release 同时提供 SHA256SUMS.txt 和免安装 ZIP。
+安装包为本项目自行构建，尚未代码签名。Release 提供安装程序和 SHA256SUMS.txt，不再生成便携 ZIP。应用验证统一通过安装程序覆盖升级，保留原目录和用户设置。
 
 开发者构建：安装 [Inno Setup](https://jrsoftware.org/isdl.php)，然后运行 `./build.ps1 -Installer -Iscc 'ISCC.exe 的完整路径'`。安装脚本位于 `installer/PeripheralBattery.iss`，应用安装与卸载都采用当前用户模式；不会修改机器级环境变量或系统驱动。

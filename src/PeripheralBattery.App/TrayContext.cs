@@ -28,7 +28,7 @@ internal sealed class TrayContext : ApplicationContext
 
     internal TrayContext(bool show, bool showDiagnostics, bool showSettings, bool startMonitoring = true)
     {
-        Storage.Log("启动 v1.3.0 · 双环电量图标");
+        Storage.Log("启动 v1.4.0 · 黑白默认配色与底部消耗弧");
         popup.LowThreshold = settings.LowThreshold;
         renderedRings = BatteryRings.From(current.Mouse, current.Keyboard, settings);
         tray = new TrayIcon(BatteryTrayRenderer.Create(renderedRings)) { Text = "A950 · S75", ContextMenu = menu, ShowNativeTip = !settings.HoverPanel };
