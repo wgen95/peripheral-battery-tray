@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+dist/
+evidence/
+.vs/
+*.user
+*.log
+--worker
+panel-preview.png

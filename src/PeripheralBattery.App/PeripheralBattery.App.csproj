@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType><TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms><ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>PeripheralBattery</AssemblyName><Version>1.0.0</Version>
+    <Description>无线外设电量 · A950 与 S75</Description>
+  </PropertyGroup>
+  <ItemGroup><ProjectReference Include="../PeripheralBattery.Core/PeripheralBattery.Core.csproj" /></ItemGroup>
+</Project>

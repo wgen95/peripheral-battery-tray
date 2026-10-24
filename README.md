@@ -1,0 +1,78 @@
+# 无线外设电量 · Peripheral Battery
+
+轻量的 Windows 托盘工具，独立查询 **达尔优 A950** 和 **新盟 S75** 的 2.4GHz 接收器电量。C# / .NET 8 / WinForms / Windows 原生 HID API，无浏览器、无厂商后台依赖，无运行时第三方 NuGet 包。
+
+![真实设备读取后的紧凑浮层](docs/images/panel.png)
+
+> 图示为实机采样的 UI 渲染；设备休眠或断连时不显示旧百分比。首次硬件验证：A950 50%，S75 57%，后续 S75 56%。这些是测试时的读数，不是固定展示数据。
+
+从 [Releases](https://github.com/wgen95/peripheral-battery-tray/releases) 下载 [Windows x64 独立版](https://github.com/wgen95/peripheral-battery-tray/releases/download/v1.0.0/PeripheralBattery-1.0.0-win-x64.zip)，解压并双击 `PeripheralBattery.exe`。此版本自带 .NET，不用另装运行时；正常运行无需联网、管理员权限或替换设备驱动。默认不开机自启。
+
+- 左键托盘图标：打开 / 收起深色两行面板；点外部或按 Esc 收起。
+- 鼠标悬停：紧凑浮层；可在设置中关闭，保留原生电量摘要。
+- 右键：显示电量、立即刷新、设备诊断、设置、查看日志、退出。
+- 默认每 60 秒查询；可设 15–600 秒。接收器插拔与系统唤醒后延迟刷新。
+- 低于阈值时数字变色。关闭浮层或诊断窗口继续后台运行。
+- 托盘图标可能被 Windows 收纳在 `^` 中，可手动拖到可见区域。
+
+## 已验证设备
+
+| 设备 | 2.4GHz 接口 | 独立读数 |
+|---|---|---|
+| 达尔优 A950 | 260D:1074，FF02 查询 / FF01 回复，17 字节 Compx 协议 | 本机 C# 与独立 Python 探针均取得通过校验的百分比 |
+| 新盟 S75 标准版 | 0C45:FEFA，FF60:0061，内部身份 0C45:8006 / 2:15 | 本机取得官方 GET_DEVICE_INFO 电量字段；验证失败后恢复 |
+| Compx 260D:1084 接口 | 相同查询通道 | 单独探针取得有效帧，但具体物理型号未确认；仅可手动选择 |
+
+**不能将这张表推广到 A950 Pro/Air/Wing 或 S75 Pro。** 同一 VID/PID 可能被多个产品共享；S75 会额外检查内部产品标识。仅对本次实测的固件与接口确认可用。充电状态尚未验证，不在 UI 宣称支持。
+
+标准 HID 电池接口只做描述能力检查，未实现适用于任意外设的通用读数。陌生设备不会自动猜测协议或发送设置命令。所有百分比来自验证后的电量报告，绝不从在线状态或无线信号推算。
+
+## 构建与测试
+
+需要 Windows 10/11 x64、.NET 8 SDK（8.0.400 或更新的 8.0 SDK）。
+
+```powershell
+./build.ps1
+# SDK 不在 PATH 时：
+./build.ps1 -Dotnet 'C:/path/to/dotnet.exe'
+
+# 仅运行
+dotnet run --project src/PeripheralBattery.App
+# 协议与状态测试（无需硬件）
+dotnet run --project tests/PeripheralBattery.Tests
+# 真实硬件诊断（本机信息写入指定文件）
+New-Item -ItemType Directory -Force evidence
+dotnet run --project tests/PeripheralBattery.Tests -- --hardware evidence/probe.json
+# WinForms 集成测试：真实硬件、50 次浮层开关、Shell 托盘注册、图片渲染
+dotnet run --project tests/PeripheralBattery.UiTests -c Release -- evidence/panel.png
+```
+
+自包含单文件发布因附带运行时而比源码 / 依赖框架版本大，首次启动也需要解包原生库；实际大小见 Release。保留压缩包内文档及许可证。
+
+CLI（WinExe 不输出控制台，诊断请读取 JSON 或日志）：
+
+```powershell
+./PeripheralBattery.exe --show
+./PeripheralBattery.exe --diagnostics
+./PeripheralBattery.exe --settings
+./PeripheralBattery.exe --diagnose ./diagnostics.json
+./PeripheralBattery.exe --quit
+```
+
+重复启动会通知当前实例。`--diagnose` 是有 8 秒看门狗的独立诊断，可与托盘程序并行但可能争用厂商通道，建议先退出托盘再运行。
+
+## 目录
+
+```text
+src/PeripheralBattery.Core/      HID 枚举、报告描述、协议校验、设备适配、状态模型
+src/PeripheralBattery.App/       托盘、浮层、诊断、设置、查询进程管理、日志
+tests/PeripheralBattery.Tests/  协议和状态断言、独立硬件探针入口
+tests/PeripheralBattery.UiTests/ Windows UI 渲染、生命周期、Shell 注册测试
+tools/                          阶段二 Python 对照探针（仅开发，需 hidapi）
+docs/                           可行性、协议依据、测试结果、排查说明
+build.ps1                       可重复构建、测试、发布、打包和 SHA256
+```
+
+配置与滚动日志保存在 `%LOCALAPPDATA%/PeripheralBattery`。自启动写入当前用户的 `HKCU/Software/Microsoft/Windows/CurrentVersion/Run`，可在设置取消。日志不持续记录每个不变读数；超过 1 MiB 轮换一次。诊断导出包含本机 HID 路径等信息，公开前请自行检查。原始本机 `evidence/` 不提交。
+
+阅读 [可行性调查](docs/01-feasibility.md)、[读取协议](docs/02-protocols.md)、[测试与验收](docs/03-test-report.md)、[故障排查](docs/04-troubleshooting.md)。
