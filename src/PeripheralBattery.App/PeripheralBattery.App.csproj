@@ -2,7 +2,7 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType><TargetFramework>net8.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms><ApplicationManifest>app.manifest</ApplicationManifest>
-    <AssemblyName>PeripheralBattery</AssemblyName><Version>1.1.0</Version>
+    <AssemblyName>PeripheralBattery</AssemblyName><Version>1.1.1</Version>
     <ApplicationIcon>Assets/App.ico</ApplicationIcon>
     <Description>无线外设电量 · A950 与 S75</Description>
   </PropertyGroup>

@@ -6,7 +6,7 @@
 
 > 图示为实机采样的 UI 渲染；设备休眠或断连时不显示旧百分比。首次硬件验证：A950 50%，S75 57%，后续 S75 56%。这些是测试时的读数，不是固定展示数据。
 
-推荐下载 [Windows 安装程序](https://github.com/wgen95/peripheral-battery-tray/releases/download/v1.1.0/PeripheralBattery-1.1.0-Setup-x64.exe)，双击安装后即可从开始菜单打开。也可下载 [免安装 ZIP](https://github.com/wgen95/peripheral-battery-tray/releases/download/v1.1.0/PeripheralBattery-1.1.0-win-x64.zip)。两种版本都自带 .NET；正常运行无需联网、管理员权限或替换设备驱动，默认不开机自启。
+推荐下载 [Windows 安装程序](https://github.com/wgen95/peripheral-battery-tray/releases/download/v1.1.1/PeripheralBattery-1.1.1-Setup-x64.exe)，双击安装后即可从开始菜单打开。也可下载 [免安装 ZIP](https://github.com/wgen95/peripheral-battery-tray/releases/download/v1.1.1/PeripheralBattery-1.1.1-win-x64.zip)。两种版本都自带 .NET；正常运行无需联网、管理员权限或替换设备驱动，默认不开机自启。
 
 安装版默认位于 `%LOCALAPPDATA%/Programs/PeripheralBattery`，提供开始菜单入口和可选桌面快捷方式。在 Windows **设置 → 应用 → 已安装的应用 → 无线外设电量 → 卸载** 即可删除。卸载会正常退出程序，并清理程序文件、快捷方式、自启动项、配置、日志及本应用的 .NET 解包缓存。覆盖安装可以升级。安装包尚未进行代码签名。
 

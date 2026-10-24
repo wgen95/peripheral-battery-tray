@@ -26,7 +26,7 @@ internal sealed class TrayContext : ApplicationContext
 
     internal TrayContext(bool show, bool showDiagnostics, bool showSettings, bool startMonitoring = true)
     {
-        Storage.Log("启动 v1.1.0");
+        Storage.Log("启动 v1.1.1");
         popup.LowThreshold = settings.LowThreshold;
         tray = new NotifyIcon { Icon = CreateIcon(), Text = "无线外设电量 · 正在读取", ContextMenuStrip = menu, Visible = true };
         menu.Items.Add("显示电量", null, (_, _) => ShowPopup(true));

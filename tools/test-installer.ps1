@@ -1,7 +1,7 @@
 param([string]$SetupPath = '', [string]$TestDirectory = '')
 $ErrorActionPreference = 'Stop'
 $project = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-if (-not $SetupPath) { $SetupPath = Join-Path $project 'dist/PeripheralBattery-1.1.0-Setup-x64.exe' }
+if (-not $SetupPath) { $SetupPath = Join-Path $project 'dist/PeripheralBattery-1.1.1-Setup-x64.exe' }
 if (-not $TestDirectory) { $TestDirectory = Join-Path $project 'evidence/install-smoke' }
 $target = [IO.Path]::GetFullPath($TestDirectory)
 $safePrefix = [IO.Path]::GetFullPath((Join-Path $project 'evidence')) + [IO.Path]::DirectorySeparatorChar
@@ -34,10 +34,10 @@ Run-AndWait $SetupPath $setupArgs
 $installed = Join-Path $target 'PeripheralBattery.exe'
 $uninstaller = Join-Path $target 'unins000.exe'
 $registration = Get-ItemProperty -LiteralPath $registry
-if ($registration.DisplayVersion -ne '1.1.0' -or $registration.InstallLocation.TrimEnd('\') -ne $target) { throw 'Incorrect application registration.' }
+if ($registration.DisplayVersion -ne '1.1.1' -or $registration.InstallLocation.TrimEnd('\') -ne $target) { throw 'Incorrect application registration.' }
 if (-not (Test-Path -LiteralPath $installed) -or -not (Test-Path -LiteralPath $shortcut) -or -not (Test-Path -LiteralPath $desktop)) { throw 'Missing installed app or shortcuts.' }
 $shell = New-Object -ComObject WScript.Shell
-$link = $shell.CreateShortcut($shortcut)
+$link = $shell.CreateShortcut([IO.Path]::GetFullPath($shortcut))
 Write-Output ("Shortcut target: {0}; arguments: {1}; installed app: {2}" -f $link.TargetPath, $link.Arguments, $installed)
 # Shell links may expose an equivalent DOS short path on another Windows image.
 if (-not (Test-Path -LiteralPath $link.TargetPath) -or $link.Arguments.Trim('"') -ne '--show') { throw 'Incorrect Start Menu shortcut.' }
