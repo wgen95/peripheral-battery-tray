@@ -38,7 +38,10 @@ if ($registration.DisplayVersion -ne '1.1.0' -or $registration.InstallLocation.T
 if (-not (Test-Path -LiteralPath $installed) -or -not (Test-Path -LiteralPath $shortcut) -or -not (Test-Path -LiteralPath $desktop)) { throw 'Missing installed app or shortcuts.' }
 $shell = New-Object -ComObject WScript.Shell
 $link = $shell.CreateShortcut($shortcut)
-if ($link.TargetPath -ne $installed -or $link.Arguments -ne '--show') { throw 'Incorrect Start Menu shortcut.' }
+Write-Output ("Shortcut target: {0}; arguments: {1}; installed app: {2}" -f $link.TargetPath, $link.Arguments, $installed)
+# Shell links may expose an equivalent DOS short path on another Windows image.
+if (-not (Test-Path -LiteralPath $link.TargetPath) -or $link.Arguments.Trim('"') -ne '--show') { throw 'Incorrect Start Menu shortcut.' }
+if ((Get-FileHash -LiteralPath $link.TargetPath).Hash -ne (Get-FileHash -LiteralPath $installed).Hash) { throw 'Shortcut points to a different executable.' }
 $diagnostic = Join-Path $project 'evidence/installed-probe.json'
 Run-AndWait $installed @('--diagnose', ('"' + $diagnostic + '"'))
 if (-not (Test-Path -LiteralPath $diagnostic)) { throw 'Installed app failed to generate device diagnostics.' }
