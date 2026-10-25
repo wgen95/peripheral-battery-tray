@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "1.4.0"
+  #define AppVersion "2.0.0"
 #endif
 #define AppName "无线外设电量"
 
@@ -99,7 +99,9 @@ Filename: "{app}\PeripheralBattery.exe"; Parameters: "--show"; Description: "启
 ; Only these product-owned directories; never delete their parent directories.
 Type: filesandordirs; Name: "{localappdata}\PeripheralBattery"
 Type: filesandordirs; Name: "{%TEMP}\.net\PeripheralBattery"
+Type: filesandordirs; Name: "{%TEMP}\.net\PeripheralBattery.Backend"
 Type: filesandordirs; Name: "{code:GetCustomBundleCache}"; Check: HasCustomBundleCache
+Type: filesandordirs; Name: "{code:GetCustomBackendCache}"; Check: HasCustomBundleCache
 
 [Code]
 function HasCustomBundleCache(): Boolean;
@@ -113,6 +115,11 @@ begin
     Result := AddBackslash(ExpandFileName(GetEnv('DOTNET_BUNDLE_EXTRACT_BASE_DIR'))) + 'PeripheralBattery'
   else
     Result := ExpandConstant('{%TEMP}\.net\PeripheralBattery');
+end;
+
+function GetCustomBackendCache(Param: String): String;
+begin
+  Result := AddBackslash(ExpandFileName(GetEnv('DOTNET_BUNDLE_EXTRACT_BASE_DIR'))) + 'PeripheralBattery.Backend';
 end;
 
 function StopInstalledApp(): Boolean;

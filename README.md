@@ -1,12 +1,14 @@
 # 无线外设电量 · Peripheral Battery
 
-轻量的 Windows 原生托盘工具，独立查询 **达尔优 A950** 和 **新盟 S75** 的 2.4GHz 接收器电量。C# / .NET 8 / WinForms / Windows 原生 HID API，无浏览器、无厂商后台依赖，无运行时第三方 NuGet 包。
+轻量的 Windows 原生托盘工具，独立查询 **达尔优 A950** 和 **新盟 S75** 的 2.4GHz 接收器电量。C++ / Win32 负责常驻托盘与浮层，已验证的 C# / .NET 8 HID 查询在短命子进程中执行；设置和诊断窗口按需启动、关闭即退出。无浏览器、无厂商后台依赖。
 
 ![真实设备读取后的紧凑浮层](docs/images/panel.png)
 
 > 图示为实机采样的 UI 渲染；设备休眠或断连时不显示旧百分比。首次硬件验证：A950 50%，S75 57%，后续 S75 56%。这些是测试时的读数，不是固定展示数据。
 
-推荐下载 [Windows 安装程序](https://github.com/wgen95/peripheral-battery-tray/releases/download/v1.4.0/PeripheralBattery-1.4.0-Setup-x64.exe)，双击安装后即可从开始菜单打开。安装程序自带 .NET；正常运行无需联网、管理员权限或替换设备驱动，默认不开机自启。
+推荐下载 [Windows 安装程序](https://github.com/wgen95/peripheral-battery-tray/releases/download/v2.0.0/PeripheralBattery-2.0.0-Setup-x64.exe)，双击安装后即可从开始菜单打开。安装程序自带 .NET；正常运行无需联网、管理员权限或替换设备驱动，默认不开机自启。
+
+**低内存常驻：**v2.0.0 的常驻进程不加载 CLR / WinForms。实机覆盖安装验证：v1.4.0 常驻工作集 88.7 MiB；v2.0.0 在打开并关闭设置 / 诊断后，105 秒样本的常驻工作集中位数 16.93 MiB，私有内存 3.29 MiB，查询期间观察到的主进程 + 查询子进程工作集合计峰值 69.66 MiB。冷启动未打开界面时约 11.3 MiB。不是在所有阶段都只占 17 MiB：打开设置 / 诊断或查询时会短暂使用更多内存，关闭 / 查询结束后对应进程退出。没有周期性清空工作集来压低数字。详见 [内存说明](docs/06-memory.md)。
 
 **省电说明：**旧版每分钟主动查询 S75，虽然没有修改键盘设置，但可能干扰固件闲置倒计时。v1.2.0 改为闲置时不查询键盘。Windows 键盘活动通知只保留活动时间，不读取、保存或上传按键内容；无键盘活动通知时保持暂停查询。
 
@@ -40,7 +42,7 @@
 
 ## 构建与测试
 
-需要 Windows 10/11 x64、.NET 8 SDK（8.0.400 或更新的 8.0 SDK）。
+需要 Windows 10/11 x64、.NET 8 SDK（8.0.400 或更新的 8.0 SDK），以及 MSVC 开发者命令行（含 Windows SDK）或 MinGW-w64 的 g++ / windres。
 
 ```powershell
 ./build.ps1 -Installer
@@ -56,8 +58,8 @@ dotnet run --project tests/PeripheralBattery.Tests
 # 真实硬件诊断（本机信息写入指定文件）
 New-Item -ItemType Directory -Force evidence
 dotnet run --project tests/PeripheralBattery.Tests -- --hardware evidence/probe.json
-# WinForms 集成测试：鼠标实测、键盘闲置保护、50 次浮层开关、Shell 托盘注册、图片渲染
-dotnet run --project tests/PeripheralBattery.UiTests -c Release -- evidence/panel.png
+# 安装版内存采样（会启动已经安装的应用，不运行便携副本）
+./tools/measure-installed-memory.ps1 -Seconds 105
 ```
 
 自包含单文件发布因附带运行时而比源码 / 依赖框架版本大，首次启动也需要解包原生库；实际大小见 Release。发行包仅提供安装程序和 SHA256SUMS.txt。本机应用验证统一覆盖安装，不运行发布暂存目录中的可执行文件。
@@ -80,7 +82,8 @@ CLI（WinExe 不输出控制台，诊断请读取 JSON 或日志）：
 src/PeripheralBattery.Core/      HID 枚举、报告描述、协议校验、设备适配、状态模型
 src/PeripheralBattery.App/       托盘、浮层、诊断、设置、查询进程管理、日志
 tests/PeripheralBattery.Tests/  协议和状态断言、独立硬件探针入口
-tests/PeripheralBattery.UiTests/ Windows UI 渲染、生命周期、Shell 注册测试
+tests/PeripheralBattery.UiTests/ 旧托盘实现的参考测试，非 v2 原生前端验收
+src/PeripheralBattery.Native/   原生常驻前端、双环绘制、浮层与子进程管理
 tools/                          阶段二 Python 对照探针（仅开发，需 hidapi）
 docs/                           可行性、协议依据、测试结果、排查说明
 build.ps1                       可重复构建、测试、发布、打包和 SHA256

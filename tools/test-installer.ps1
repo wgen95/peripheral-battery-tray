@@ -1,7 +1,7 @@
 param([string]$SetupPath = '', [string]$TestDirectory = '')
 $ErrorActionPreference = 'Stop'
 $project = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-if (-not $SetupPath) { $SetupPath = Join-Path $project 'dist/PeripheralBattery-1.4.0-Setup-x64.exe' }
+if (-not $SetupPath) { $SetupPath = Join-Path $project 'dist/PeripheralBattery-2.0.0-Setup-x64.exe' }
 if (-not $TestDirectory) { $TestDirectory = Join-Path $project 'evidence/install-smoke' }
 $target = [IO.Path]::GetFullPath($TestDirectory)
 $safePrefix = [IO.Path]::GetFullPath((Join-Path $project 'evidence')) + [IO.Path]::DirectorySeparatorChar
@@ -14,9 +14,11 @@ $desktop = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) '无线�
 $runPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $dataDirectory = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'PeripheralBattery'))
 $defaultCache = [IO.Path]::GetFullPath((Join-Path $env:TEMP '.net/PeripheralBattery'))
+$backendDefaultCache = [IO.Path]::GetFullPath((Join-Path $env:TEMP '.net/PeripheralBattery.Backend'))
 $customCacheRoot = Join-Path $project ('evidence/bundle-smoke-' + [Guid]::NewGuid().ToString('N'))
 $env:DOTNET_BUNDLE_EXTRACT_BASE_DIR = $customCacheRoot
 $customCache = Join-Path $customCacheRoot 'PeripheralBattery'
+$backendCustomCache = Join-Path $customCacheRoot 'PeripheralBattery.Backend'
 $siblingSentinel = Join-Path $customCacheRoot 'UnrelatedApp/keep.txt'
 New-Item -ItemType Directory -Force -Path (Split-Path $siblingSentinel -Parent) | Out-Null
 Set-Content -LiteralPath $siblingSentinel -Value 'Must survive app uninstall.'
@@ -34,7 +36,7 @@ Run-AndWait $SetupPath $setupArgs
 $installed = Join-Path $target 'PeripheralBattery.exe'
 $uninstaller = Join-Path $target 'unins000.exe'
 $registration = Get-ItemProperty -LiteralPath $registry
-if ($registration.DisplayVersion -ne '1.4.0' -or $registration.InstallLocation.TrimEnd('\') -ne $target) { throw 'Incorrect application registration.' }
+if ($registration.DisplayVersion -ne '2.0.0' -or $registration.InstallLocation.TrimEnd('\') -ne $target) { throw 'Incorrect application registration.' }
 if (-not (Test-Path -LiteralPath $installed) -or -not (Test-Path -LiteralPath $shortcut) -or -not (Test-Path -LiteralPath $desktop)) { throw 'Missing installed app or shortcuts.' }
 # Check the actual MS-SHLLINK payload. WScript.Shell returns empty shortcut
 # properties on the hosted Server image even though the .lnk file exists.
@@ -90,7 +92,7 @@ $cleanupDeadline = [DateTimeOffset]::UtcNow.AddSeconds(10)
 while ((Test-Path -LiteralPath $target) -and [DateTimeOffset]::UtcNow -lt $cleanupDeadline) { Start-Sleep -Milliseconds 200 }
 if ((Test-Path -LiteralPath $installed) -or (Test-Path $registry) -or (Test-Path -LiteralPath $shortcut) -or (Test-Path -LiteralPath $desktop)) { throw 'App files, registration or shortcuts were left behind.' }
 if (Get-ItemProperty -LiteralPath $runPath -Name PeripheralBattery -ErrorAction SilentlyContinue) { throw 'Startup setting was left behind.' }
-foreach ($directory in @($target, $dataDirectory, $defaultCache, $customCache)) {
+foreach ($directory in @($target, $dataDirectory, $defaultCache, $customCache, $backendDefaultCache, $backendCustomCache)) {
     if (Test-Path -LiteralPath $directory) { throw "Application directory left behind: $directory" }
 }
 if (-not (Test-Path -LiteralPath $siblingSentinel)) { throw 'Uninstall touched another application directory.' }

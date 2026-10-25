@@ -44,7 +44,9 @@ internal static class Storage
         set
         {
             using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
-            if (value) key.SetValue("PeripheralBattery", $"\"{Environment.ProcessPath}\"");
+            string app = Path.GetFileNameWithoutExtension(Environment.ProcessPath) == "PeripheralBattery.Backend"
+                ? Path.Combine(Path.GetDirectoryName(Environment.ProcessPath!)!, "PeripheralBattery.exe") : Environment.ProcessPath!;
+            if (value) key.SetValue("PeripheralBattery", $"\"{app}\"");
             else key.DeleteValue("PeripheralBattery", false);
         }
     }

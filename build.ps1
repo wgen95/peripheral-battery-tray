@@ -10,6 +10,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Tray icon tests failed' }
     & $Dotnet publish src/PeripheralBattery.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=None -o dist/win-x64
     if ($LASTEXITCODE -ne 0) { throw 'Publish failed' }
+    & ./tools/build-native.ps1 -OutputDirectory (Join-Path $PSScriptRoot 'dist/win-x64')
+    if ($LASTEXITCODE -ne 0) { throw 'Native frontend build failed' }
+    $nativeTest = Join-Path $PSScriptRoot 'evidence/native-tests.json'
+    $testProcess = Start-Process -FilePath (Join-Path $PSScriptRoot 'dist/win-x64/PeripheralBattery.exe') -ArgumentList @('--self-test', ('"' + $nativeTest + '"')) -WindowStyle Hidden -Wait -PassThru
+    if ($testProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $nativeTest)) { throw 'Native frontend tests failed' }
     Copy-Item README.md,LICENSE,THIRD-PARTY-NOTICES.md -Destination dist/win-x64
     Copy-Item docs -Destination dist/win-x64 -Recurse -Force
     $version = ([xml](Get-Content src/PeripheralBattery.App/PeripheralBattery.App.csproj -Raw)).Project.PropertyGroup.Version
