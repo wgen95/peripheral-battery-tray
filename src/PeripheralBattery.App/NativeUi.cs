@@ -5,6 +5,8 @@ namespace PeripheralBattery.App;
 
 internal static class NativeUi
 {
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool SetProcessDpiAwarenessContext(IntPtr context);
     [StructLayout(LayoutKind.Sequential)] internal struct RawInputDevice
     { public ushort Page, Usage; public uint Flags; public IntPtr Window; }
     [DllImport("user32.dll", SetLastError = true)]

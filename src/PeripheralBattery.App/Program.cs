@@ -11,7 +11,12 @@ internal static class Program
     {
         if (args.Length == 3 && args[0] == "--worker") return RunWorker(args);
         if (args.Length == 2 && args[0] == "--diagnose") return RunDiagnostic(args[1]);
-        if (args.Length == 1 && args[0] is "--settings-window" or "--diagnostics-window") return RunWindow(args[0]);
+        if (args.Length == 1 && args[0] is "--settings-window" or "--diagnostics-window")
+        {
+            // Configure DPI before the UI method is JIT-compiled and WinForms loads.
+            NativeUi.SetProcessDpiAwarenessContext(new IntPtr(-4));
+            return RunWindow(args[0]);
+        }
         return 0;
     }
     // Keep WinForms types out of the worker entry point's JIT / assembly loading.

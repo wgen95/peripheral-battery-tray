@@ -293,6 +293,7 @@ static int selfTest(const std::wstring& path) {
     writeFile(path, "{\"Passed\":"+std::to_string(checks)+",\"TrayRegistered\":false,\"HardwareQueried\":false}"); return 0;
 }
 int WINAPI wWinMain(HINSTANCE h, HINSTANCE, PWSTR, int) {
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     instance=h; int argc=0; auto argv=CommandLineToArgvW(GetCommandLineW(),&argc); std::vector<std::wstring> args(argv,argv+argc);LocalFree(argv);
     wchar_t exe[32768];GetModuleFileNameW(nullptr,exe,32768);executableDirectory=std::wstring(exe);executableDirectory.resize(executableDirectory.find_last_of(L"\\/"));
     PWSTR local=nullptr;if(FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData,0,nullptr,&local)))return 1;root=std::wstring(local)+L"\\PeripheralBattery";CoTaskMemFree(local);CreateDirectoryW(root.c_str(),nullptr);
@@ -307,7 +308,6 @@ int WINAPI wWinMain(HINSTANCE h, HINSTANCE, PWSTR, int) {
         mutex=CreateMutexW(nullptr,TRUE,L"Local\\PeripheralBattery.Tray.v1"); if(!mutex)throw std::runtime_error("Cannot create instance mutex");
         if(GetLastError()==ERROR_ALREADY_EXISTS){result=sendCommand(command)?0:1;CloseHandle(mutex);CloseHandle(childJob);GdiplusShutdown(gdiplus);return result;}
         if(command==3){CloseHandle(mutex);CloseHandle(childJob);GdiplusShutdown(gdiplus);return 0;}
-        SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         WNDCLASSW wc{};wc.hInstance=h;wc.lpfnWndProc=mainProc;wc.lpszClassName=L"PeripheralBattery.Native";RegisterClassW(&wc);
         wc.lpfnWndProc=popupProc;wc.lpszClassName=L"PeripheralBattery.Popup";wc.style=CS_DROPSHADOW;wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);RegisterClassW(&wc);
         taskbarCreated=RegisterWindowMessageW(L"TaskbarCreated"); mainWindow=CreateWindowExW(WS_EX_TOOLWINDOW,L"PeripheralBattery.Native",L"PeripheralBattery.Tray",WS_POPUP,0,0,0,0,nullptr,nullptr,h,nullptr);
