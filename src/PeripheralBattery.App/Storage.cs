@@ -24,9 +24,35 @@ internal static class Storage
     }
     internal static void Save(AppSettings s)
     {
-        Directory.CreateDirectory(Root);
-        var tmp = SettingsPath + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(s, Json.Options)); File.Move(tmp, SettingsPath, true);
+        WriteSettings(SettingsPath, System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(s, Json.Options)));
+    }
+    internal static bool IsStorageError(Exception error) => error is IOException or UnauthorizedAccessException or System.Security.SecurityException;
+    internal static void SaveWithAutoStart(AppSettings settings, bool enabled) =>
+        SaveWithAutoStart(SettingsPath, settings, enabled, value => AutoStart = value);
+
+    // Save configuration first. If Windows rejects the startup change, restore
+    // the previous bytes so the still-open form can retry the whole operation.
+    internal static void SaveWithAutoStart(string path, AppSettings settings, bool enabled, Action<bool> applyStartup)
+    {
+        byte[]? previous = File.Exists(path) ? File.ReadAllBytes(path) : null;
+        WriteSettings(path, System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(settings, Json.Options)));
+        try { applyStartup(enabled); }
+        catch (Exception startupError) when (IsStorageError(startupError))
+        {
+            try { if (previous == null) File.Delete(path); else WriteSettings(path, previous); }
+            catch (Exception restoreError) when (IsStorageError(restoreError))
+            {
+                throw new IOException("自启动未能保存，恢复原设置时也发生错误。请重新打开设置检查。", new AggregateException(startupError, restoreError));
+            }
+            throw;
+        }
+    }
+    private static void WriteSettings(string path, byte[] data)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try { File.WriteAllBytes(temporary, data); File.Move(temporary, path, true); }
+        finally { try { File.Delete(temporary); } catch (Exception error) when (IsStorageError(error)) { } }
     }
     internal static void Log(string message)
     {

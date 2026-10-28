@@ -1,7 +1,8 @@
 param([string]$SetupPath = '', [string]$TestDirectory = '')
 $ErrorActionPreference = 'Stop'
 $project = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-if (-not $SetupPath) { $SetupPath = Join-Path $project 'dist/PeripheralBattery-2.0.0-Setup-x64.exe' }
+$version = ([xml](Get-Content (Join-Path $project 'src/PeripheralBattery.App/PeripheralBattery.App.csproj') -Raw)).Project.PropertyGroup.Version
+if (-not $SetupPath) { $SetupPath = Join-Path $project "dist/PeripheralBattery-$version-Setup-x64.exe" }
 if (-not $TestDirectory) { $TestDirectory = Join-Path $project 'evidence/install-smoke' }
 $target = [IO.Path]::GetFullPath($TestDirectory)
 $safePrefix = [IO.Path]::GetFullPath((Join-Path $project 'evidence')) + [IO.Path]::DirectorySeparatorChar
@@ -31,12 +32,24 @@ function Run-AndWait([string]$Exe, [string[]]$Arguments) {
     if (-not $process.WaitForExit(60000)) { throw "Timed out: $([IO.Path]::GetFileName($Exe))" }
     if ($process.ExitCode -ne 0) { throw "Exit code $($process.ExitCode): $([IO.Path]::GetFileName($Exe))" }
 }
+function Assert-NoProductProcesses([string]$Directory) {
+    $prefix = $Directory.TrimEnd('\') + '\'
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(10)
+    do {
+        $remaining = @(Get-Process -Name 'PeripheralBattery','PeripheralBattery.Backend' -ErrorAction SilentlyContinue | Where-Object {
+            $_.Path -and $_.Path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)
+        })
+        if ($remaining.Count -eq 0) { return }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    throw "Installed application left product processes running: $($remaining.Id -join ', ')"
+}
 $setupArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', ('/DIR="' + $target + '"'), '/TASKS="desktopicon"', ('/LOG="' + (Join-Path $project 'evidence/installer-smoke.log') + '"'))
 Run-AndWait $SetupPath $setupArgs
 $installed = Join-Path $target 'PeripheralBattery.exe'
 $uninstaller = Join-Path $target 'unins000.exe'
 $registration = Get-ItemProperty -LiteralPath $registry
-if ($registration.DisplayVersion -ne '2.0.0' -or $registration.InstallLocation.TrimEnd('\') -ne $target) { throw 'Incorrect application registration.' }
+if ($registration.DisplayVersion -ne $version -or $registration.InstallLocation.TrimEnd('\') -ne $target) { throw 'Incorrect application registration.' }
 if (-not (Test-Path -LiteralPath $installed) -or -not (Test-Path -LiteralPath $shortcut) -or -not (Test-Path -LiteralPath $desktop)) { throw 'Missing installed app or shortcuts.' }
 # Check the actual MS-SHLLINK payload. WScript.Shell returns empty shortcut
 # properties on the hosted Server image even though the .lnk file exists.
@@ -72,21 +85,32 @@ foreach ($linkPath in @($shortcut, $desktop)) {
 $diagnostic = Join-Path $project 'evidence/installed-probe.json'
 Run-AndWait $installed @('--diagnose', ('"' + $diagnostic + '"'))
 if (-not (Test-Path -LiteralPath $diagnostic)) { throw 'Installed app failed to generate device diagnostics.' }
+Assert-NoProductProcesses $target
+# Legacy settings deliberately omit new optional fields and contain an unknown
+# future field. Installing an update must not rewrite either preference data.
+$settingsPath = Join-Path $dataDirectory 'settings.json'
+New-Item -ItemType Directory -Force -Path $dataDirectory | Out-Null
+[IO.File]::WriteAllText($settingsPath, '{"PollSeconds":90,"LowThreshold":15,"HoverPanel":false,"KeyboardOuterRing":false,"ColorTheme":"Purple","FutureSetting":{"Keep":true}}')
+$settingsHash = (Get-FileHash -LiteralPath $settingsPath -Algorithm SHA256).Hash
+if (-not (Test-Path -LiteralPath $runPath)) { New-Item -Path $runPath -Force | Out-Null }
+$startupValue = '"' + $installed + '"'
+New-ItemProperty -LiteralPath $runPath -Name PeripheralBattery -Value $startupValue -PropertyType String | Out-Null
 $main = Start-Process -FilePath $installed -WindowStyle Hidden -PassThru
 if ($main.WaitForExit(4000)) { throw 'Installed app did not stay running.' }
 # Cover installing over a running version, using the application's normal quit command.
 Run-AndWait $SetupPath $setupArgs
 if (-not $main.WaitForExit(10000) -or $main.ExitCode -ne 0) { throw 'Upgrade failed to close the existing app normally.' }
+Assert-NoProductProcesses $target
+if ((Get-FileHash -LiteralPath $settingsPath -Algorithm SHA256).Hash -ne $settingsHash) { throw 'Upgrade rewrote legacy settings or removed an unknown preference.' }
+if ((Get-ItemProperty -LiteralPath $runPath -Name PeripheralBattery).PeripheralBattery -ne $startupValue) { throw 'Upgrade changed the startup preference.' }
 $main = Start-Process -FilePath $installed -WindowStyle Hidden -PassThru
 if ($main.WaitForExit(4000)) { throw 'Upgraded app did not stay running.' }
-if (-not (Test-Path -LiteralPath $runPath)) { New-Item -Path $runPath -Force | Out-Null }
-New-ItemProperty -LiteralPath $runPath -Name PeripheralBattery -Value ('"' + $installed + '"') -PropertyType String | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $dataDirectory 'uninstall-test/nested') | Out-Null
 Set-Content -LiteralPath (Join-Path $dataDirectory 'uninstall-test/nested/cache.txt') -Value 'Must be removed.'
-if (-not (Test-Path -LiteralPath (Join-Path $dataDirectory 'settings.json'))) { Set-Content -LiteralPath (Join-Path $dataDirectory 'settings.json') -Value '{"PollSeconds":60}' }
 # The resolved uninstall target was verified inside project/evidence before installation.
 Run-AndWait $uninstaller @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', ('/LOG="' + (Join-Path $project 'evidence/uninstaller-smoke.log') + '"'))
 if (-not $main.WaitForExit(10000) -or $main.ExitCode -ne 0) { throw 'Uninstall did not close the running app normally.' }
+Assert-NoProductProcesses $target
 # Inno's final self-delete helper can finish just after its launcher exits.
 $cleanupDeadline = [DateTimeOffset]::UtcNow.AddSeconds(10)
 while ((Test-Path -LiteralPath $target) -and [DateTimeOffset]::UtcNow -lt $cleanupDeadline) { Start-Sleep -Milliseconds 200 }
@@ -99,5 +123,5 @@ if (-not (Test-Path -LiteralPath $siblingSentinel)) { throw 'Uninstall touched a
 Remove-Item -LiteralPath $siblingSentinel
 Remove-Item -LiteralPath (Split-Path $siblingSentinel -Parent)
 Remove-Item -LiteralPath $customCacheRoot
-Write-Output 'PASS: installation, app registration and shortcuts, real diagnostic, upgrade/uninstall while running; no app files, startup, configuration, logs or bundle caches remain; unrelated sibling directory preserved.'
+Write-Output 'PASS: installation, app registration and shortcuts, real diagnostic, legacy settings/startup preserved across running upgrade; no orphan app/helper processes, app files, startup, configuration, logs or bundle caches remain after uninstall; unrelated sibling directory preserved.'
 exit 0

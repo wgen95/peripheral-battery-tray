@@ -13,6 +13,7 @@ var settings = new AppSettings();
 var normal = BatteryRings.From(mouse, keyboard, settings);
 Check(normal.Outer.Percent == 25 && normal.Inner.Percent == 75, "default outer keyboard / inner mouse");
 settings.KeyboardOuterRing = false;
+settings.LowBatteryNotifications = false;
 var swapped = BatteryRings.From(mouse, keyboard, settings);
 Check(swapped.Outer.Percent == 75 && swapped.Inner.Percent == 25, "swapped outer mouse / inner keyboard");
 Check(JsonSerializer.Deserialize<AppSettings>("{}", Json.Options)!.KeyboardOuterRing, "old settings preserve default keyboard outer");
@@ -20,10 +21,41 @@ Check(!JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(settings
     "ring order survives settings serialization");
 Check(JsonSerializer.Deserialize<AppSettings>("{}", Json.Options)!.ColorTheme == TrayColorTheme.Monochrome,
     "old settings default to monochrome");
+Check(JsonSerializer.Deserialize<AppSettings>("{}", Json.Options)!.LowBatteryNotifications,
+    "old settings enable the low battery reminder by default");
+Check(!JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(new AppSettings { LowBatteryNotifications = false }, Json.Options), Json.Options)!.LowBatteryNotifications,
+    "disabled low battery reminders survive settings serialization");
 var paletteSettings = new AppSettings { ColorTheme = TrayColorTheme.Purple };
 Check(JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(paletteSettings, Json.Options), Json.Options)!.ColorTheme == TrayColorTheme.Purple,
     "palette survives settings serialization");
 Check(BatteryRings.From(mouse, keyboard, paletteSettings) != normal, "palette changes invalidate the rendered icon cache");
+var initialEdits = new AppSettings();
+var thresholdEdit = new AppSettings { LowThreshold = 15 };
+var quickChanges = new AppSettings { ColorTheme = TrayColorTheme.Blue, KeyboardOuterRing = false };
+var merged = SettingsForm.MergeEdits(initialEdits, thresholdEdit, quickChanges);
+Check(merged.LowThreshold == 15 && merged.ColorTheme == TrayColorTheme.Blue && !merged.KeyboardOuterRing,
+    "saving an edited threshold preserves palette and order changed through the tray menu");
+var intentional = SettingsForm.MergeEdits(initialEdits,
+    new AppSettings { ColorTheme = TrayColorTheme.Purple, KeyboardOuterRing = false },
+    new AppSettings { ColorTheme = TrayColorTheme.Green });
+Check(intentional.ColorTheme == TrayColorTheme.Purple && !intentional.KeyboardOuterRing,
+    "intentional color and ring order edits in the open form win over concurrent settings");
+var otherEdits = SettingsForm.MergeEdits(initialEdits,
+    new AppSettings { PollSeconds = 120, HoverPanel = false, LowBatteryNotifications = false, MouseReceiver = "mouse-edited", KeyboardReceiver = "keyboard-edited" },
+    new AppSettings { PollSeconds = 90, MouseReceiver = "mouse-other", KeyboardReceiver = "keyboard-other" });
+Check(otherEdits.PollSeconds == 120 && !otherEdits.HoverPanel && !otherEdits.LowBatteryNotifications &&
+    otherEdits.MouseReceiver == "mouse-edited" && otherEdits.KeyboardReceiver == "keyboard-edited",
+    "all editable preferences and explicit receiver selections apply when changed");
+var untouched = SettingsForm.MergeEdits(initialEdits, new AppSettings(),
+    new AppSettings { PollSeconds = 90, HoverPanel = false, LowBatteryNotifications = false, MouseReceiver = "mouse-latest", KeyboardReceiver = "keyboard-latest" });
+Check(untouched.PollSeconds == 90 && !untouched.HoverPanel && !untouched.LowBatteryNotifications &&
+    untouched.MouseReceiver == "mouse-latest" && untouched.KeyboardReceiver == "keyboard-latest",
+    "unchanged controls preserve every latest preference and receiver selection");
+var futureSettings = JsonSerializer.Deserialize<AppSettings>("{\"FutureFeature\":{\"Mode\":\"custom\",\"Enabled\":false}}", Json.Options)!;
+using (var mergedJson = JsonDocument.Parse(JsonSerializer.Serialize(SettingsForm.MergeEdits(initialEdits, thresholdEdit, futureSettings), Json.Options)))
+    Check(mergedJson.RootElement.GetProperty("FutureFeature").GetProperty("Mode").GetString() == "custom" &&
+        !mergedJson.RootElement.GetProperty("FutureFeature").GetProperty("Enabled").GetBoolean(),
+        "saving known preferences preserves unknown settings from the latest configuration");
 Check(BatteryRing.From(Value("A950", 20), 20).Low, "threshold boundary is low");
 Check(!BatteryRing.From(Value("A950", 21), 20).Low, "above threshold is normal");
 Check(BatteryRing.From(Value("A950", 30), 40).Low, "custom threshold is used");
@@ -133,6 +165,8 @@ var settingsThread = new Thread(() =>
         Check(order.SelectedIndex == 1 && order.Items.Count == 2, "settings UI reflects swapped device order");
         var colors = (ComboBox)form.Controls.Find("TrayColors", true).Single();
         Check(colors.SelectedIndex == 0 && colors.Items.Count == 6, "settings UI exposes six palettes with monochrome default");
+        var notifications = (CheckBox)form.Controls.Find("LowBatteryNotifications", true).Single();
+        Check(!notifications.Checked, "settings UI reflects disabled low battery reminders");
         // Render offscreen. Do not Show(), run the app, or change the installed tray.
         // A never-shown Form omits invisible children in DrawToBitmap. Render its
         // detached layout instead, with the same font and client dimensions.
@@ -143,6 +177,7 @@ var settingsThread = new Thread(() =>
         layout.PerformLayout();
         Check(layout.ClientRectangle.Contains(order.Bounds), "device order selector fits in the settings layout");
         Check(layout.ClientRectangle.Contains(colors.Bounds), "palette selector fits in the settings layout");
+        Check(layout.ClientRectangle.Contains(notifications.Bounds), "low battery reminder fits in the settings layout");
         Check(layout.ClientRectangle.Contains(((Control)form.AcceptButton!).Bounds), "save button fits in the settings layout");
         using var image = new Bitmap(layout.Width, layout.Height);
         layout.DrawToBitmap(image, layout.ClientRectangle);
@@ -152,6 +187,35 @@ var settingsThread = new Thread(() =>
 });
 settingsThread.SetApartmentState(ApartmentState.STA); settingsThread.Start(); settingsThread.Join();
 if (settingsError != null) throw settingsError;
+
+// Exercise file/startup consistency in an isolated temporary directory only.
+var transactionDirectory = Path.Combine(Path.GetTempPath(), "PeripheralBattery-settings-test-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(transactionDirectory);
+try
+{
+    var path = Path.Combine(transactionDirectory, "settings.json");
+    byte[] original = System.Text.Encoding.UTF8.GetBytes("{\"PollSeconds\":90,\"KeyboardOuterRing\":false,\"custom\":\"preserve exact bytes\"}\r\n");
+    File.WriteAllBytes(path, original);
+    bool rejected = false;
+    try { Storage.SaveWithAutoStart(path, new AppSettings { ColorTheme = TrayColorTheme.Blue }, true, _ => throw new UnauthorizedAccessException("fixture")); }
+    catch (UnauthorizedAccessException) { rejected = true; }
+    Check(rejected && File.ReadAllBytes(path).SequenceEqual(original), "startup failure restores existing settings byte for byte");
+    File.Delete(path);
+    try { Storage.SaveWithAutoStart(path, new AppSettings(), true, _ => throw new IOException("fixture")); }
+    catch (IOException) { }
+    Check(!File.Exists(path), "startup failure during first save leaves no partial configuration");
+    bool? startupValue = null;
+    Storage.SaveWithAutoStart(path, new AppSettings { LowBatteryNotifications = false, ColorTheme = TrayColorTheme.Green }, false, value => startupValue = value);
+    var stored = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path), Json.Options)!;
+    Check(startupValue == false && !stored.LowBatteryNotifications && stored.ColorTheme == TrayColorTheme.Green,
+        "successful settings save persists the complete configuration and requested startup state");
+    bool startupTouched = false;
+    try { Storage.SaveWithAutoStart(transactionDirectory, new AppSettings(), true, _ => startupTouched = true); }
+    catch (Exception error) when (Storage.IsStorageError(error)) { }
+    Check(!startupTouched, "configuration write failure cannot change the startup entry");
+    Check(Directory.GetFiles(transactionDirectory, "*.tmp").Length == 0, "successful and failed saves leave no temporary settings files");
+}
+finally { Directory.Delete(transactionDirectory, true); }
 
 using var process = System.Diagnostics.Process.GetCurrentProcess();
 // Warm up native icon allocation, then check that repeated refreshes release handles.

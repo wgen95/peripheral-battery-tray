@@ -86,6 +86,13 @@ internal sealed class DiagnosticsForm : Form
         if (snapshot == null) return;
         using var dialog = new SaveFileDialog { Filter = "JSON 诊断|*.json", FileName = $"battery-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.json" };
         if (dialog.ShowDialog(this) == DialogResult.OK)
-            File.WriteAllText(dialog.FileName, JsonSerializer.Serialize(new { Snapshot = snapshot, LastValidReadings = history }, Json.Options));
+        {
+            try { File.WriteAllText(dialog.FileName, JsonSerializer.Serialize(new { Snapshot = snapshot, LastValidReadings = history }, Json.Options)); }
+            catch (Exception error) when (Storage.IsStorageError(error))
+            {
+                MessageBox.Show(this, "诊断文件未能导出，请选择其他保存位置后重试。\n\n" + error.Message,
+                    "无法导出诊断", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
     }
 }

@@ -26,6 +26,17 @@ if (-not $fileVersion.StartsWith($version + '+') -and $fileVersion -ne $version)
 $afterHash = if (Test-Path -LiteralPath $settingsPath) { (Get-FileHash -LiteralPath $settingsPath -Algorithm SHA256).Hash } else { $null }
 $afterStartup = (Get-ItemProperty -LiteralPath $runPath -Name PeripheralBattery -ErrorAction SilentlyContinue).PeripheralBattery
 if ($beforeHash -ne $afterHash -or $beforeStartup -ne $afterStartup) { throw 'Upgrade changed existing settings or startup preference.' }
+$installedPrefix = $installedDirectory + '\'
+$processDeadline = [DateTimeOffset]::UtcNow.AddSeconds(5)
+do {
+    $remaining = @(Get-Process -Name 'PeripheralBattery','PeripheralBattery.Backend' -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and $_.Path.StartsWith($installedPrefix, [StringComparison]::OrdinalIgnoreCase)
+    })
+    if ($remaining.Count -eq 0) { break }
+    Start-Sleep -Milliseconds 100
+} while ([DateTimeOffset]::UtcNow -lt $processDeadline)
+if ($remaining.Count -ne 0) { throw "Upgrade left an installed app or helper running: $($remaining.Id -join ', ')" }
 Write-Output "PASS: installed application upgraded from $($before.DisplayVersion) to $version at the original location. Settings and startup preference preserved."
+Write-Output 'No installed application or helper processes remain from the previous version.'
 Write-Output 'Application was not launched by this test. Open it manually from the Start menu.'
 exit 0

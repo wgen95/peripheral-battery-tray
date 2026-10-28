@@ -15,6 +15,9 @@ try {
     $nativeTest = Join-Path $PSScriptRoot 'evidence/native-tests.json'
     $testProcess = Start-Process -FilePath (Join-Path $PSScriptRoot 'dist/win-x64/PeripheralBattery.exe') -ArgumentList @('--self-test', ('"' + $nativeTest + '"')) -WindowStyle Hidden -Wait -PassThru
     if ($testProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $nativeTest)) { throw 'Native frontend tests failed' }
+    $nativeChecks = Get-Content -LiteralPath $nativeTest -Raw | ConvertFrom-Json
+    if ($nativeChecks.Passed -lt 1 -or $nativeChecks.TrayRegistered -ne $false -or $nativeChecks.HardwareQueried -ne $false) { throw 'Invalid native self-test result' }
+    Write-Output ("PASS: {0} native parser, tray rendering, receiver and notification policy assertions; no tray registration or hardware queries." -f $nativeChecks.Passed)
     Copy-Item README.md,LICENSE,THIRD-PARTY-NOTICES.md -Destination dist/win-x64
     Copy-Item docs -Destination dist/win-x64 -Recurse -Force
     $version = ([xml](Get-Content src/PeripheralBattery.App/PeripheralBattery.App.csproj -Raw)).Project.PropertyGroup.Version

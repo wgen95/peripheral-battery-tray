@@ -87,28 +87,35 @@ public sealed class DareuA950Provider : IBatteryProvider
 
 public sealed class XinmengS75Provider : IBatteryProvider
 {
+    // Reuse passive descriptor checks while idle; never open or write a HID here.
+    internal static (HidDevice? Device, Reading? Unavailable) ResolveReceiver(List<HidDevice> devices, string? selectedReceiver)
+    {
+        var candidates = devices.Where(d => d.Vid == 0x0C45 && d.Pid == 0xFEFA && d.UsagePage == 0xFF60 &&
+            d.Usage == 0x61 && d.InputLength == 65 && d.OutputLength == 65 && (selectedReceiver == null || d.ReceiverKey == selectedReceiver)).ToList();
+        if (candidates.Count == 0) return (null, Reading.Empty("S75", "键盘", devices.Any(d => d.Vid == 0x0C45 && d.Pid == 0xFEFA && (selectedReceiver == null || d.ReceiverKey == selectedReceiver)) ? BatteryState.Unsupported : BatteryState.Disconnected, "未找到选定的 0C45:FEFA / FF60 接口。其他硬件版本暂不支持；请查看 HID 列表。"));
+        if (candidates.Count > 1) return (null, Reading.Empty("S75", "键盘", BatteryState.Unknown, "发现多个候选接收器，请在设置中选择目标。"));
+        return (candidates[0], null);
+    }
+
     public async Task<Reading> ReadAsync(List<HidDevice> devices, string? selectedReceiver, CancellationToken ct)
     {
         const string method = "S75 官方网页协议 · GET_DEVICE_INFO";
-        var candidates = devices.Where(d => d.Vid == 0x0C45 && d.Pid == 0xFEFA && d.UsagePage == 0xFF60 &&
-            d.Usage == 0x61 && d.InputLength == 65 && d.OutputLength == 65 && (selectedReceiver == null || d.ReceiverKey == selectedReceiver)).ToList();
-        if (candidates.Count == 0) return Reading.Empty("S75", "键盘", devices.Any(d => d.Vid == 0x0C45 && d.Pid == 0xFEFA && (selectedReceiver == null || d.ReceiverKey == selectedReceiver)) ? BatteryState.Unsupported : BatteryState.Disconnected, "未找到选定的 0C45:FEFA / FF60 接口。其他硬件版本暂不支持；请查看 HID 列表。");
-        if (candidates.Count > 1) return Reading.Empty("S75", "键盘", BatteryState.Unknown, "发现多个候选接收器，请在设置中选择目标。");
-        var device = candidates[0];
+        var (device, unavailable) = ResolveReceiver(devices, selectedReceiver);
+        if (unavailable != null) return unavailable;
         try
         {
-            var (percent, frames) = await Transport.Query(device, device, Protocols.S75Request(), false, r => Protocols.ParseS75(r), ct);
+            var (percent, frames) = await Transport.Query(device!, device!, Protocols.S75Request(), false, r => Protocols.ParseS75(r), ct);
             bool disconnected = frames.Split(" | ").Any(f => f.StartsWith("0055FC04", StringComparison.Ordinal));
             bool sleeping = frames.Split(" | ").Any(f => f.StartsWith("0055FC06", StringComparison.Ordinal));
             if (!percent.HasValue && (disconnected || sleeping))
                 return new("S75", "键盘", disconnected ? BatteryState.WirelessDisconnected : BatteryState.Sleeping,
-                    null, method, "接收器返回官方协议的无线断连 / 休眠状态通知；没有当前电量。请按键后刷新。", DateTimeOffset.Now, device.ReceiverKey, frames);
+                    null, method, "接收器返回官方协议的无线断连 / 休眠状态通知；没有当前电量。请按键后刷新。", DateTimeOffset.Now, device!.ReceiverKey, frames);
             return new("S75", "键盘", percent.HasValue ? BatteryState.Valid : BatteryState.ReadFailed, percent, method,
                 percent.HasValue ? "已验证 S75 内部标识 0C45:8006 / 2:15 及电量字段。" : "未收到匹配 S75 身份和格式的响应；原因尚未确定。可能为其他共享接收器型号、休眠或无线断连。请按键后刷新。",
-                DateTimeOffset.Now, device.ReceiverKey, frames);
+                DateTimeOffset.Now, device!.ReceiverKey, frames);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
-        { return new("S75", "键盘", BatteryState.ReadFailed, null, method, ex.Message, DateTimeOffset.Now, device.ReceiverKey); }
+        { return new("S75", "键盘", BatteryState.ReadFailed, null, method, ex.Message, DateTimeOffset.Now, device!.ReceiverKey); }
     }
 }
 
@@ -128,8 +135,9 @@ public static class Probe
         // Check immediately before HID I/O, after the mouse query / worker startup.
         // Idle receivers receive NO output report, including during startup/resume.
         if (!(queryUntil > DateTimeOffset.Now))
-            return Task.FromResult(Reading.Empty("S75", "键盘", BatteryState.Idle,
-                "键盘闲置，已停止主动查询以免干扰熄灯和休眠。按键后自动恢复；此状态不代表已确认硬件休眠。"));
+            return Task.FromResult(XinmengS75Provider.ResolveReceiver(devices, receiver).Unavailable ??
+                Reading.Empty("S75", "键盘", BatteryState.Idle,
+                    "键盘闲置，已停止主动查询以免干扰熄灯和休眠。按键后自动恢复；此状态不代表已确认硬件休眠。"));
         return (provider ?? new XinmengS75Provider()).ReadAsync(devices, receiver, ct);
     }
 }

@@ -51,6 +51,11 @@ internal static class Native
 
 public static class HidDiscovery
 {
+    // The size probe must fail with ERROR_INSUFFICIENT_BUFFER and leave enough
+    // space for cbSize and a terminated UTF-16 path. Hot-unplug can fail earlier.
+    internal static bool IsValidDetailBuffer(int bytes, int error) =>
+        error == 122 && bytes >= (IntPtr.Size == 8 ? 8 : 6) && bytes <= 128 * 1024 && bytes % 2 == 0;
+
     public static List<HidDevice> Enumerate()
     {
         var result = new List<HidDevice>();
@@ -68,15 +73,17 @@ public static class HidDiscovery
                     throw new Win32Exception(Marshal.GetLastWin32Error());
                 }
                 var info = new Native.DeviceInfo { Size = Marshal.SizeOf<Native.DeviceInfo>() };
-                Native.SetupDiGetDeviceInterfaceDetailW(set, ref data, IntPtr.Zero, 0, out int needed, ref info);
+                bool unexpectedSuccess = Native.SetupDiGetDeviceInterfaceDetailW(set, ref data, IntPtr.Zero, 0, out int needed, ref info);
+                if (unexpectedSuccess || !IsValidDetailBuffer(needed, Marshal.GetLastWin32Error())) continue;
                 var detail = Marshal.AllocHGlobal(needed);
                 try
                 {
                     Marshal.WriteInt32(detail, IntPtr.Size == 8 ? 8 : 6);
                     if (!Native.SetupDiGetDeviceInterfaceDetailW(set, ref data, detail, needed, out _, ref info)) continue;
-                    var path = Marshal.PtrToStringUni(detail + 4)!;
+                    var path = Marshal.PtrToStringUni(detail + 4);
+                    if (string.IsNullOrWhiteSpace(path)) continue;
                     var id = new StringBuilder(512);
-                    Native.SetupDiGetDeviceInstanceIdW(set, ref info, id, id.Capacity, out _);
+                    if (!Native.SetupDiGetDeviceInstanceIdW(set, ref info, id, id.Capacity, out _)) continue;
                     var parent = new StringBuilder(512);
                     if (Native.CM_Get_Parent(out var parentDev, info.DevInst, 0) == 0)
                         Native.CM_Get_Device_IDW(parentDev, parent, parent.Capacity, 0);

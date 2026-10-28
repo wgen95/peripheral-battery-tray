@@ -54,12 +54,28 @@ Check(!activity.Record(now.AddSeconds(10)), "continuous typing does not repeated
 Check(activity.IsActive(now.AddSeconds(39)) && !activity.IsActive(now.AddSeconds(40)), "typing extends only activity window");
 activity.Reset(); Check(!activity.IsActive(now), "suspend clears previous activity");
 var provider = new CountingProvider();
-var idle = await Probe.ReadKeyboardAsync([], null, null, CancellationToken.None, provider);
+var compatible = new HidDevice("fixture-a", "fixture-id", "receiver-a", "S75", "fixture", 0x0C45, 0xFEFA, 0,
+    0xFF60, 0x61, 65, 65, 0, [], null);
+var idle = await Probe.ReadKeyboardAsync([compatible], null, null, CancellationToken.None, provider);
 Check(provider.Calls == 0 && idle.State == BatteryState.Idle && idle.Percent == null, "idle request must not call HID provider or reuse percentage");
-await Probe.ReadKeyboardAsync([], null, now.AddSeconds(-1), CancellationToken.None, provider);
+await Probe.ReadKeyboardAsync([compatible], null, now.AddSeconds(-1), CancellationToken.None, provider);
 Check(provider.Calls == 0, "expired worker request must not touch keyboard");
+var unplugged = await Probe.ReadKeyboardAsync([], null, null, CancellationToken.None, provider);
+Check(unplugged.State == BatteryState.Disconnected && unplugged.Percent == null, "an absent idle receiver is disconnected, not waiting for use");
+var incompatible = await Probe.ReadKeyboardAsync([compatible with { OutputLength = 0 }], null, null, CancellationToken.None, provider);
+Check(incompatible.State == BatteryState.Unsupported, "an idle receiver with incompatible report capabilities is not called supported");
+var other = compatible with { Path = "fixture-b", ReceiverKey = "receiver-b" };
+var ambiguous = await Probe.ReadKeyboardAsync([compatible, other], null, null, CancellationToken.None, provider);
+Check(ambiguous.State == BatteryState.Unknown, "multiple idle receiver candidates are not guessed");
+var missingSelection = await Probe.ReadKeyboardAsync([other], compatible.ReceiverKey, null, CancellationToken.None, provider);
+Check(missingSelection.State == BatteryState.Disconnected, "saved receiver selection never silently falls back to another receiver");
+var selected = await Probe.ReadKeyboardAsync([compatible, other], compatible.ReceiverKey, null, CancellationToken.None, provider);
+Check(selected.State == BatteryState.Idle && provider.Calls == 0, "a unique selected idle receiver is resolved without any provider calls");
 await Probe.ReadKeyboardAsync([], null, DateTimeOffset.Now.AddSeconds(10), CancellationToken.None, provider);
 Check(provider.Calls == 1, "an active keyboard may be queried");
+Check(HidDiscovery.IsValidDetailBuffer(512, 122), "valid UTF-16 interface detail allocation accepted");
+foreach (var (bytes, error) in new[] { (0, 122), (-1, 122), (4, 122), (9, 122), (131074, 122), (512, 0), (512, 1167) })
+    Check(!HidDiscovery.IsValidDetailBuffer(bytes, error), "invalid or disconnected interface size probe never reaches allocation");
 Console.WriteLine($"PASS: {count} protocol and state assertions (synthetic fixtures; hardware is separate).");
 
 sealed class CountingProvider : IBatteryProvider

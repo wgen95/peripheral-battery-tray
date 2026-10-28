@@ -5,11 +5,15 @@
 #include <stdexcept>
 #include <cmath>
 #include <cstring>
+#include <charconv>
 
 // Small bounded JSON document reader for our own worker/config files. No code execution.
 struct Json {
     enum Type { Null, Bool, Number, String, Object, Array } type = Null;
     bool boolean = false; double number = 0;
+    // Preserve parsed values exactly when a quick menu edits another property.
+    // In particular, unknown decimals and integers above 2^53 must not drift.
+    std::string numberLiteral;
     std::string string; std::map<std::string, Json> object; std::vector<Json> array;
     Json() = default;
     Json(const char* s) : type(String), string(s) {}
@@ -21,7 +25,7 @@ struct Json {
     Json& operator[](const std::string& key) { type = Object; return object[key]; }
     const Json& at(const std::string& key) const { static const Json nil; auto i = object.find(key); return i == object.end() ? nil : i->second; }
     std::string text(std::string fallback = "") const { return type == String ? string : fallback; }
-    int integer(int fallback = 0) const { return type == Number && number >= -2147483648. && number <= 2147483647. ? (int)number : fallback; }
+    int integer(int fallback = 0) const { return type == Number && number >= -2147483648. && number <= 2147483647. && std::trunc(number) == number ? (int)number : fallback; }
     bool flag(bool fallback = false) const { return type == Bool ? boolean : fallback; }
     static void utf8(std::string& s, unsigned cp) {
         if (cp <= 0x7f) s += (char)cp;
@@ -67,7 +71,9 @@ struct Json {
             if (s[p] == '0') ++p; else while (p < s.size() && s[p] >= '0' && s[p] <= '9') ++p;
             if (p < s.size() && s[p] == '.') { ++p; size_t q = p; while (p < s.size() && s[p] >= '0' && s[p] <= '9') ++p; if (p == q) throw std::runtime_error("Invalid fraction"); }
             if (p < s.size() && (s[p] == 'e' || s[p] == 'E')) { ++p; if (p < s.size() && (s[p] == '-' || s[p] == '+')) ++p; size_t q = p; while (p < s.size() && s[p] >= '0' && s[p] <= '9') ++p; if (p == q) throw std::runtime_error("Invalid exponent"); }
-            Json j; j.type = Number; j.number = std::stod(s.substr(start, p - start)); if (!std::isfinite(j.number)) throw std::runtime_error("Invalid number"); return j;
+            Json j; j.type = Number; j.numberLiteral = s.substr(start, p - start);
+            auto parsed = std::from_chars(j.numberLiteral.data(), j.numberLiteral.data() + j.numberLiteral.size(), j.number, std::chars_format::general);
+            if (parsed.ec != std::errc{} || parsed.ptr != j.numberLiteral.data() + j.numberLiteral.size() || !std::isfinite(j.number)) throw std::runtime_error("Invalid number"); return j;
         }
     };
     static Json parse(const std::string& s) { if (s.size() > 4 * 1024 * 1024) throw std::runtime_error("JSON size limit"); Parser p{ s }; if (s.compare(0, 3, "\xef\xbb\xbf") == 0) p.p = 3; auto j = p.value(); p.ws(); if (p.p != s.size()) throw std::runtime_error("Trailing JSON"); return j; }
@@ -78,7 +84,15 @@ struct Json {
     }
     std::string dump() const {
         switch (type) {
-        case Bool: return boolean ? "true" : "false"; case Number: return std::to_string((long long)number); case String: return quote(string);
+        case Bool: return boolean ? "true" : "false";
+        case Number: {
+            if (!std::isfinite(number)) throw std::runtime_error("Invalid number");
+            if (!numberLiteral.empty()) return numberLiteral;
+            char buffer[64]; auto written = std::to_chars(buffer, buffer + sizeof(buffer), number, std::chars_format::general);
+            if (written.ec != std::errc{}) throw std::runtime_error("Invalid number");
+            return std::string(buffer, written.ptr);
+        }
+        case String: return quote(string);
         case Object: { std::string s = "{"; for (auto& kv : object) { if (s.size() > 1) s += ','; s += quote(kv.first) + ':' + kv.second.dump(); } return s + '}'; }
         case Array: { std::string s = "["; for (auto& v : array) { if (s.size() > 1) s += ','; s += v.dump(); } return s + ']'; }
         default: return "null";

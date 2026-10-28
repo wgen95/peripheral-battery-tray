@@ -36,6 +36,6 @@ $report = [pscustomobject]@{
     Note='100 ms sampling of installed application. Transient peaks shorter than sampling interval may be missed. No working-set trimming.'
 }
 New-Item -ItemType Directory -Force -Path (Join-Path $project 'evidence') | Out-Null
-$report | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $project 'evidence/memory-2.0.0.json') -Encoding utf8
+$report | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $project ('evidence/memory-' + $registration.DisplayVersion + '.json')) -Encoding utf8
 if ($report.ClrLoadedInResident) { throw 'Resident unexpectedly loaded CLR.' }
 $report | ConvertTo-Json -Compress
