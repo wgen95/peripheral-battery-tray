@@ -20,17 +20,21 @@ using namespace Gdiplus;
 
 static const GUID IconGuid = { 0x6319a943, 0x4e29, 0x4c5e, {0xa8,0xda,0xa0,0xe0,0x18,0x53,0x5d,0xa5} };
 static constexpr UINT Callback = WM_APP + 1;
-static constexpr UINT_PTR Poll = 1, Debounce = 2, Watch = 3, PopupWatch = 4, Idle = 5, TrayRetry = 6;
-static HINSTANCE instance; static HWND mainWindow, popupWindow; static HFONT popupFont;
-static HICON icon; static bool registeredIcon, closing, suspended, pinned, menuOpen, dragged, refreshPending;
+static constexpr UINT_PTR Poll = 1, Debounce = 2, Watch = 3, PopupWatch = 4, KeyboardDebounce = 5, TrayRetry = 6;
+static constexpr int PanelWidth = 216, PanelHeight = 100;
+enum class Refresh { None, Scan, Keyboard, Manual };
+static Refresh queuedRefresh;
+static HWND mainWindow, popupWindow;
+static HICON icon; static bool registeredIcon, closing, suspended, pinned, menuOpen, dragged, workerQueriesKeyboard;
 static POINT pressed{}; static bool hasPress; static UINT popupDpi = 96;
-static ULONGLONG keyboardUntil, manualUntil, outsideSince, workerStarted;
+static ULONGLONG outsideSince, workerStarted;
 static HANDLE worker, uiProcesses[2]{}, signals[6]{}, childJob;
 static std::wstring root, executableDirectory, workerOutput, workerInput;
 static UINT taskbarCreated;
 static unsigned trayFailures;
 static RECT popupAnchor{};
 static std::map<HANDLE, bool> keyboardDevices;
+static Policy::KeyboardPolling keyboardPolling;
 static Policy::LowBatteryEpisode lowEpisodes[2];
 static Json settings = Json::obj(), snapshot = Json::obj(), history = Json::obj();
 static std::string lastIconKey;
@@ -75,7 +79,7 @@ static Json emptyReading(const char* name, const char* category, const char* sta
 static std::wstring display(const Json& r) {
     auto state = r.at("State").text(); int n = r.at("Percent").integer(-1);
     if (state == "Valid" && n >= 0 && n <= 100) return std::to_wstring(n) + L"%";
-    if (state == "Idle") return L"待使用"; if (state == "Sleeping") return L"休眠中";
+    if (state == "Idle") return L"按键后读取"; if (state == "Sleeping") return L"休眠中";
     if (state == "Disconnected") return L"接收器断连"; if (state == "WirelessDisconnected") return L"设备断连";
     if (state == "ReadFailed") return L"读取失败"; if (state == "Unsupported") return L"暂不支持";
     if (state == "LowBatteryWarning") return L"低电量警告"; return L"电量未知";
@@ -84,19 +88,34 @@ static int percent(const Json& r) { int n = r.at("Percent").integer(-1); return 
 static int threshold() { return settings.at("LowThreshold").integer(20); }
 static bool isLow(const Json& r) { int p = percent(r); return p >= 0 ? p <= threshold() : r.at("State").text() == "LowBatteryWarning"; }
 static bool hoverEnabled() { return settings.at("HoverPanel").flag(true); }
-static ULONGLONG queryUntil() { return std::max(keyboardUntil, manualUntil); }
-static bool keyboardActivityPath(const std::string& path) {
-    auto rawPath = Policy::hidPath(path);
-    if (rawPath.find("VID_0C45&PID_FEFA") == std::string::npos) return false;
-    std::string target; unsigned candidates = 0; auto selected = settings.at("KeyboardReceiver").text();
+static std::string keyboardReceiver() {
+    std::string target;
+    auto selected = settings.at("KeyboardReceiver").text();
     for (const auto& d : snapshot.at("Devices").array) {
         if (d.at("Vid").integer() != 0x0c45 || d.at("Pid").integer() != 0xfefa ||
             d.at("UsagePage").integer() != 0xff60 || d.at("Usage").integer() != 0x61 ||
             d.at("InputLength").integer() != 65 || d.at("OutputLength").integer() != 65) continue;
-        if (!selected.empty() && selected != d.at("ReceiverKey").text()) continue;
-        ++candidates; target = Policy::physicalReceiver(d.at("ReceiverKey").text());
+        auto key = d.at("ReceiverKey").text();
+        if (!selected.empty() && selected != key) continue;
+        if (!target.empty() || key.empty()) return {};
+        target = key;
     }
-    if (candidates != 1 || target.empty()) return false;
+    return target;
+}
+static const Json* cachedKeyboardReading() {
+    const auto state = snapshot.at("Keyboard").at("State").text();
+    if (state != "Idle" && state != "Sleeping") return nullptr;
+    const auto& previous = history.at("S75");
+    if (previous.at("Name").text() != "S75" || percent(previous) < 0 || previous.at("AttemptedAt").text().empty()) return nullptr;
+    auto receiver = keyboardReceiver();
+    if (receiver.empty() || previous.at("ReceiverKey").text() != receiver) return nullptr;
+    return &previous;
+}
+static bool keyboardActivityPath(const std::string& path) {
+    auto rawPath = Policy::hidPath(path);
+    if (rawPath.find("VID_0C45&PID_FEFA") == std::string::npos) return false;
+    auto target = Policy::physicalReceiver(keyboardReceiver());
+    if (target.empty()) return false;
     for (const auto& d : snapshot.at("Devices").array) {
         if (d.at("UsagePage").integer() == 1 && d.at("Usage").integer() == 6 &&
             Policy::hidPath(d.at("Path").text()) == rawPath &&
@@ -132,23 +151,27 @@ static Color normalColor(const std::string& theme) {
     if (theme == "Orange" || theme == "5") return Color(255, 237, 152, 53); return Color(255, 24, 24, 27);
 }
 static std::string themeName() { auto& t = settings.at("ColorTheme"); return t.type == Json::Number ? std::to_string(t.integer()) : t.text("Monochrome"); }
-static void drawRing(Graphics& g, RectF bounds, const Json& reading) {
-    Pen edge(Color(210, 127, 133, 143), 7); int p = percent(reading); Color red(255, 243, 75, 80);
+static void drawRing(Graphics& g, RectF bounds, const Json& reading, bool cached = false) {
+    int p = percent(reading);
+    Color red(255, 243, 75, 80);
     if (p < 0) {
-        REAL d1[]{ 1.2f, 1.6f }, d2[]{ 1.68f, 2.24f }; edge.SetDashPattern(d1, 2);
-        Pen unknown(isLow(reading) ? red : Color(255, 145, 151, 161), 5); unknown.SetDashPattern(d2, 2);
-        g.DrawEllipse(&edge, bounds); g.DrawEllipse(&unknown, bounds); return;
+        Pen outline(isLow(reading) ? red : Color(255, 128, 135, 146), 4);
+        g.DrawEllipse(&outline, bounds);
+        return;
     }
-    g.DrawEllipse(&edge, bounds); if (isLow(reading)) { Pen rim(red, 7); g.DrawEllipse(&rim, bounds); }
+    Pen edge(Color(210, 127, 133, 143), 7);
+    g.DrawEllipse(&edge, bounds); if (!cached && isLow(reading)) { Pen rim(red, 7); g.DrawEllipse(&rim, bounds); }
     Pen consumed(Color(255, 250, 250, 252), 5); g.DrawEllipse(&consumed, bounds); if (p == 0) return;
-    Pen remaining(isLow(reading) ? red : normalColor(themeName()), 5);
+    Pen remaining(cached ? Color(255, 93, 100, 111) : isLow(reading) ? red : normalColor(themeName()), 5);
     if (p == 100) g.DrawEllipse(&remaining, bounds); else { REAL sweep = p * 3.6f; g.DrawArc(&remaining, bounds, -90 - sweep / 2, sweep); }
 }
 static NOTIFYICONDATAW notifyData() {
     NOTIFYICONDATAW d{}; d.cbSize = sizeof(d); d.hWnd = mainWindow; d.uID = 1; d.guidItem = IconGuid;
     d.uCallbackMessage = Callback; d.hIcon = icon; d.uFlags = NIF_GUID | NIF_MESSAGE | NIF_ICON | NIF_TIP;
     if (!hoverEnabled() && !IsWindowVisible(popupWindow)) d.uFlags |= NIF_SHOWTIP;
-    auto tip = L"A950 " + display(snapshot.at("Mouse")) + L"\nS75 " + display(snapshot.at("Keyboard"));
+    const auto* cached = cachedKeyboardReading();
+    auto keyboard = cached ? display(*cached) + L"（上次读取）" : display(snapshot.at("Keyboard"));
+    auto tip = L"A950 " + display(snapshot.at("Mouse")) + L"\nS75 " + keyboard;
     wcsncpy_s(d.szTip, tip.c_str(), _TRUNCATE); return d;
 }
 static void scheduleTrayRetry() {
@@ -184,11 +207,15 @@ static void notifyLowBattery() {
     if (Shell_NotifyIconW(NIM_MODIFY, &d)) for (unsigned index = 0; index < 2; ++index) if (offered[index]) lowEpisodes[index].acknowledge();
 }
 static void render() {
-    auto& m = snapshot.at("Mouse"); auto& k = snapshot.at("Keyboard"); bool outerKeyboard = settings.at("KeyboardOuterRing").flag(true);
-    std::string key = std::to_string(percent(m)) + ":" + std::to_string(percent(k)) + ":" + std::to_string(isLow(m)) + ":" + std::to_string(isLow(k)) + ":" + std::to_string(outerKeyboard) + themeName();
+    const auto* cached = cachedKeyboardReading();
+    const auto& m = snapshot.at("Mouse");
+    const auto& k = cached ? *cached : snapshot.at("Keyboard");
+    bool outerKeyboard = settings.at("KeyboardOuterRing").flag(true);
+    std::string key = std::to_string(percent(m)) + ":" + std::to_string(percent(k)) + ":" + std::to_string(isLow(m)) + ":" + std::to_string(isLow(k)) + ":" + std::to_string(outerKeyboard) + ":" + std::to_string(cached != nullptr) + themeName();
     if (!icon || key != lastIconKey) {
         Bitmap bitmap(64, 64, PixelFormat32bppARGB); Graphics g(&bitmap); g.SetSmoothingMode(SmoothingModeAntiAlias);
-        drawRing(g, RectF(5, 5, 54, 54), outerKeyboard ? k : m); drawRing(g, RectF(18, 18, 28, 28), outerKeyboard ? m : k);
+        drawRing(g, RectF(5, 5, 54, 54), outerKeyboard ? k : m, outerKeyboard && cached);
+        drawRing(g, RectF(18, 18, 28, 28), outerKeyboard ? m : k, !outerKeyboard && cached);
         HICON next{}; if (bitmap.GetHICON(&next) != Ok) throw std::runtime_error("Cannot render tray icon");
         HICON previous = icon; icon = next; modifyTray(); if (previous) DestroyIcon(previous); lastIconKey = key;
     } else modifyTray();
@@ -207,7 +234,9 @@ static HANDLE launchBackend(const std::wstring& arguments, bool showUI = false) 
 }
 static void finishWorker(bool timedOut = false);
 static void cancelWorker() {
-    refreshPending = false;
+    queuedRefresh = Refresh::None;
+    keyboardPolling.pending = false;
+    KillTimer(mainWindow, KeyboardDebounce);
     if (worker) {
         if (WaitForSingleObject(worker, 0) == WAIT_TIMEOUT) { TerminateProcess(worker, 1); WaitForSingleObject(worker, 2000); }
         CloseHandle(worker); worker = nullptr;
@@ -216,15 +245,37 @@ static void cancelWorker() {
     if (!workerInput.empty()) DeleteFileW(workerInput.c_str());
     if (!workerOutput.empty()) DeleteFileW(workerOutput.c_str());
 }
-static void requestRefresh(bool manual = false) {
-    if (manual) { manualUntil = GetTickCount64() + 30000; SetTimer(mainWindow, Idle, 30000, nullptr); }
+static void requestRefresh(Refresh refresh = Refresh::Scan) {
     if (closing || suspended) return;
-    if (worker) { refreshPending = true; return; }
-    workerOutput = root + L"\\native-probe-" + std::to_wstring(GetCurrentProcessId()) + L".json"; workerInput = workerOutput + L".settings";
+    if (worker) { queuedRefresh = std::max(queuedRefresh, refresh); return; }
+    ULONGLONG now = GetTickCount64();
+    unsigned keyboardMs = 0;
+    std::string receiver;
+    if (refresh == Refresh::Keyboard) {
+        keyboardMs = keyboardPolling.take(now);
+        receiver = keyboardReceiver();
+        if (!keyboardMs || receiver.empty()) return;
+    }
+    if (refresh == Refresh::Manual) {
+        keyboardMs = 8000;
+        keyboardPolling.pending = false;
+        KillTimer(mainWindow, KeyboardDebounce);
+    }
+    workerQueriesKeyboard = keyboardMs != 0;
+    workerOutput = root + L"\\native-probe-" + std::to_wstring(GetCurrentProcessId()) + L".json";
+    workerInput = workerOutput + L".settings";
     Json request = Json::obj(); request["Settings"] = settings;
-    ULONGLONG now = GetTickCount64(); request["KeyboardQueryUntil"] = queryUntil() > now ? Json(timestamp(queryUntil() - now)) : Json();
-    try { writeFile(workerInput, request.dump()); worker = launchBackend(L"--worker \"" + workerOutput + L"\" \"" + workerInput + L"\""); workerStarted = GetTickCount64(); SetTimer(mainWindow, Watch, 100, nullptr); }
-    catch (const std::exception& e) { log(e.what()); finishWorker(true); }
+    // Authorize the collection that produced the activity, even if a new
+    // receiver joins between the last enumeration and the worker's scan.
+    if (!receiver.empty()) request["Settings"]["KeyboardReceiver"] = receiver;
+    request["KeyboardQueryUntil"] = keyboardMs ? Json(timestamp(keyboardMs)) : Json();
+    try {
+        writeFile(workerInput, request.dump());
+        worker = launchBackend(L"--worker \"" + workerOutput + L"\" \"" + workerInput + L"\"");
+        workerStarted = GetTickCount64();
+        if (workerQueriesKeyboard) keyboardPolling.lastAttempt = workerStarted;
+        SetTimer(mainWindow, Watch, 100, nullptr);
+    } catch (const std::exception& e) { log(e.what()); finishWorker(true); }
 }
 static void finishWorker(bool timedOut) {
     bool good = false; Json next;
@@ -239,23 +290,29 @@ static void finishWorker(bool timedOut) {
     KillTimer(mainWindow, Watch); if (!workerInput.empty()) DeleteFileW(workerInput.c_str()); if (!workerOutput.empty()) DeleteFileW(workerOutput.c_str());
     if (closing || suspended) return;
     if (good) {
+        auto oldReceiver = keyboardReceiver();
         keyboardDevices.clear();
-        if (queryUntil() <= GetTickCount64() && percent(next.at("Keyboard")) >= 0) next["Keyboard"] = emptyReading("S75", "键盘", "Idle", "键盘闲置，暂停查询以免干扰熄灯省电；按键后恢复。");
+        Json previous = std::move(snapshot);
+        const auto& oldKeyboard = previous.at("Keyboard");
+        snapshot = std::move(next);
+        // A passive scan cannot confirm that a disconnected keyboard has rejoined.
+        if (snapshot.at("Keyboard").at("State").text() == "Idle" &&
+            oldKeyboard.at("State").text() == "WirelessDisconnected" && !oldReceiver.empty() && oldReceiver == keyboardReceiver())
+            snapshot["Keyboard"] = oldKeyboard;
         for (const char* key : {"Mouse", "Keyboard"}) {
-            auto& r = next.at(key); auto& old = snapshot.at(key);
+            const auto& r = snapshot.at(key); const auto& old = previous.at(key);
             if (percent(r) >= 0) history[r.at("Name").text()] = r;
             if (old.at("State").text() != r.at("State").text() || percent(old) != percent(r)) log(r.at("Name").text() + ": " + narrow(display(r)));
         }
-        snapshot = std::move(next);
     } else {
         snapshot["Mouse"] = emptyReading("A950", "鼠标", "ReadFailed", "读取失败或超过 8 秒，未采用旧百分比。");
-        snapshot["Keyboard"] = queryUntil() > GetTickCount64()
-            ? emptyReading("S75", "键盘", "ReadFailed", "读取失败或超过 8 秒，未采用旧百分比。")
-            : emptyReading("S75", "键盘", "Idle", "键盘闲置，暂停查询以免干扰熄灯省电；按键后恢复。");
+        if (workerQueriesKeyboard) snapshot["Keyboard"] = emptyReading("S75", "键盘", "ReadFailed", "读取失败或超过 8 秒，未采用旧百分比。");
         snapshot["CapturedAt"] = timestamp(); log("查询进程失败或超时");
     }
     render(); publishSnapshot(); if (good) notifyLowBattery();
-    if(refreshPending) { refreshPending=false; requestRefresh(); }
+    auto pending = queuedRefresh;
+    queuedRefresh = Refresh::None;
+    if (pending != Refresh::None) requestRefresh(pending);
 }
 static void reloadSettings() {
     auto mouse = settings.at("MouseReceiver").text(), keyboard = settings.at("KeyboardReceiver").text();
@@ -265,7 +322,7 @@ static void reloadSettings() {
         // A worker belongs to the receiver selection captured at its launch.
         // Never accept that result after the user switches to another receiver.
         cancelWorker(); keyboardDevices.clear();
-        if (changedKeyboard) { keyboardUntil = manualUntil = 0; KillTimer(mainWindow, Idle); lowEpisodes[1] = {}; snapshot["Keyboard"] = emptyReading("S75", "键盘", "Idle", "接收器选择已更新，按键后恢复读取。"); }
+        if (changedKeyboard) { keyboardPolling = {}; lowEpisodes[1] = {}; snapshot["Keyboard"] = emptyReading("S75", "键盘", "Unknown", "接收器选择已更新，等待读取。"); }
         if (changedMouse) { lowEpisodes[0] = {}; snapshot["Mouse"] = emptyReading("A950", "鼠标", "Unknown", "接收器选择已更新，等待读取。"); }
         snapshot["CapturedAt"] = timestamp(); publishSnapshot(); requestRefresh();
     }
@@ -294,7 +351,7 @@ static void openPopup(bool pin) {
     MONITORINFO monitor{ sizeof(monitor) }; GetMonitorInfoW(MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST), &monitor);
     SetWindowPos(popupWindow, nullptr, point.x, point.y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
     popupDpi = GetDpiForWindow(popupWindow); if (!popupDpi) popupDpi = 96;
-    int width = MulDiv(136, popupDpi, 96), height = MulDiv(58, popupDpi, 96);
+    int width = MulDiv(PanelWidth, popupDpi, 96), height = MulDiv(PanelHeight, popupDpi, 96);
     int x = std::clamp((int)point.x - width / 2, (int)monitor.rcWork.left, (int)monitor.rcWork.right - width);
     int y = std::clamp((int)point.y - height - MulDiv(12, popupDpi, 96), (int)monitor.rcWork.top, (int)monitor.rcWork.bottom - height);
     pinned = pin; outsideSince = 0;
@@ -343,32 +400,127 @@ static void menu() {
     UINT result = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, p.x, p.y, 0, mainWindow, nullptr);
     DestroyMenu(m); menuOpen = false; PostMessageW(mainWindow, WM_NULL, 0, 0);
     auto d = notifyData(); Shell_NotifyIconW(NIM_SETFOCUS, &d);
-    if (result == 1) openPopup(true); if (result == 2) requestRefresh(true); if (result == 3) openUI(1); if (result == 4) openUI(0);
+    if (result == 1) openPopup(true); if (result == 2) requestRefresh(Refresh::Manual); if (result == 3) openUI(1); if (result == 4) openUI(0);
     if (result == 5) ShellExecuteW(nullptr, L"open", L"notepad.exe", (L"\"" + root + L"\\app.log\"").c_str(), nullptr, SW_SHOWNORMAL);
     if (result == 6) quit();
     if (result >= 100 && result < 106) saveQuickSetting("ColorTheme", Json(colorNames[result - 100]));
     if (result == 110 || result == 111) saveQuickSetting("KeyboardOuterRing", Json(result == 110));
 }
+static std::wstring readingTime(const Json& reading) {
+    // Worker timestamps are ISO 8601 with the local clock and offset at capture.
+    auto iso = reading.at("AttemptedAt").text();
+    if (iso.size() < 16 || iso[4] != '-' || iso[7] != '-' || iso[10] != 'T' || iso[13] != ':') return {};
+    return wide(iso.substr(5, 5) + " " + iso.substr(11, 5));
+}
+
+static void roundedBox(Graphics& g, REAL x, REAL y, REAL w, REAL h, REAL radius, Color color) {
+    GraphicsPath path;
+    const REAL d = radius * 2;
+    path.AddArc(x, y, d, d, 180, 90);
+    path.AddArc(x + w - d, y, d, d, 270, 90);
+    path.AddArc(x + w - d, y + h - d, d, d, 0, 90);
+    path.AddArc(x, y + h - d, d, d, 90, 90);
+    path.CloseFigure();
+    SolidBrush fill(color);
+    g.FillPath(&fill, &path);
+}
+
+static void panelRow(HDC dc, bool keyboard, const Json& current, const Json* cached, int top) {
+    constexpr int rowHeight = 40, textLeft = 48, contentRight = PanelWidth - 15, barWidth = 42;
+    const auto& shown = cached ? *cached : current;
+    const int battery = percent(shown);
+    const bool low = !cached && isLow(current);
+    const Color accent = cached ? Color(174, 186, 207) : low ? Color(255, 151, 151) : Color(143, 221, 200);
+    const auto s = [](int value) { return MulDiv(value, popupDpi, 96); };
+    {
+        Graphics g(dc);
+        g.ScaleTransform(popupDpi / 96.0f, popupDpi / 96.0f);
+        g.SetSmoothingMode(SmoothingModeAntiAlias);
+        roundedBox(g, 7, top, PanelWidth - 14, rowHeight, 8, Color(35, 40, 51));
+        roundedBox(g, 14, top + 8, 24, 24, 7, Color(47, 56, 70));
+        Pen glyph(Color(191, 205, 225), 1.2f);
+        if (keyboard) {
+            g.DrawRectangle(&glyph, 19, top + 16, 14, 8);
+            for (int x : {21, 24, 27, 30}) g.DrawLine(&glyph, x, top + 18, x, top + 19);
+            g.DrawLine(&glyph, 23, top + 22, 29, top + 22);
+        } else {
+            g.DrawEllipse(&glyph, 21, top + 13, 10, 14);
+            g.DrawLine(&glyph, 26, top + 13, 26, top + 19);
+        }
+        if (battery >= 0) {
+            constexpr int barLeft = contentRight - barWidth;
+            roundedBox(g, barLeft, top + 29, barWidth, 3, 1.5f, Color(68, 77, 94));
+            const REAL fill = barWidth * battery / 100.0f;
+            if (fill > 0) roundedBox(g, barLeft, top + 29, fill, 3, std::min(1.5f, fill / 2), accent);
+        }
+    }
+    const auto drawText = [&](const std::wstring& value, int size, int weight, COLORREF color, RECT bounds, UINT align) {
+        HFONT font = CreateFontW(-s(size), 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
+        auto old = font ? SelectObject(dc, font) : nullptr;
+        SetTextColor(dc, color);
+        DrawTextW(dc, value.c_str(), -1, &bounds, align | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+        if (font) { SelectObject(dc, old); DeleteObject(font); }
+    };
+    const bool showStatus = cached || battery < 0;
+    drawText(keyboard ? L"S75" : L"A950", 13, FW_SEMIBOLD, RGB(245, 248, 255),
+        {s(textLeft), s(top + (showStatus ? 2 : 0)), s(142), s(top + (showStatus ? 20 : rowHeight))}, DT_LEFT);
+    if (showStatus) {
+        std::wstring status = cached ? L"上次读取" : display(current);
+        if (cached) {
+            auto time = readingTime(shown);
+            if (!time.empty()) status += L" · " + time;
+        }
+        drawText(status, 10, FW_NORMAL, RGB(179, 192, 213),
+            {s(textLeft), s(top + 20), s(cached ? 158 : contentRight), s(top + 36)}, DT_LEFT);
+    }
+    if (battery >= 0) {
+        auto valueColor = low || cached ? RGB(accent.GetR(), accent.GetG(), accent.GetB()) : RGB(245, 248, 255);
+        drawText(display(shown), 18, FW_SEMIBOLD, valueColor,
+            {s(142), s(top + 2), s(contentRight), s(top + 27)}, DT_RIGHT);
+    }
+}
+
+static void paintPanel(HDC dc, const RECT& bounds) {
+    HBRUSH background = CreateSolidBrush(RGB(23, 27, 34));
+    FillRect(dc, &bounds, background);
+    DeleteObject(background);
+    SetBkMode(dc, TRANSPARENT);
+    panelRow(dc, false, snapshot.at("Mouse"), nullptr, 7);
+    panelRow(dc, true, snapshot.at("Keyboard"), cachedKeyboardReading(), 53);
+}
+
 static LRESULT CALLBACK popupProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
     if (msg == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
     if (msg == WM_LBUTTONDOWN) { dismissPopup(); return 0; }
-    if (msg == WM_DPICHANGED) { popupDpi = HIWORD(w); if (popupFont) { DeleteObject(popupFont); popupFont = nullptr; } }
-    if (msg == WM_PAINT) {
-        PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); RECT r; GetClientRect(h, &r);
-        HBRUSH bg = CreateSolidBrush(RGB(37,37,38)); FillRect(dc, &r, bg); DeleteObject(bg);
-        if (!popupFont) popupFont = CreateFontW(-MulDiv(10, popupDpi, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-        auto oldFont = SelectObject(dc, popupFont); SetBkMode(dc, TRANSPARENT);
-        HPEN pen = CreatePen(PS_SOLID, 1, RGB(109,109,111)); auto oldPen = SelectObject(dc, pen); auto oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH)); RoundRect(dc,0,0,r.right,r.bottom,MulDiv(12,popupDpi,96),MulDiv(12,popupDpi,96));
-        SelectObject(dc,oldBrush); SelectObject(dc,oldPen); DeleteObject(pen);
-        int i = 0; for (const char* key : {"Mouse", "Keyboard"}) {
-            auto& reading = snapshot.at(key); int top = MulDiv(8 + i * 21, popupDpi, 96), pad = MulDiv(10, popupDpi, 96), row = MulDiv(21, popupDpi, 96);
-            RECT label{pad,top,r.right-pad-MulDiv(70,popupDpi,96),top+row}; auto name = wide(reading.at("Name").text()); SetTextColor(dc,RGB(246,246,247)); DrawTextW(dc,name.c_str(),-1,&label,DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS|DT_NOPREFIX);
-            RECT status{r.right-pad-MulDiv(70,popupDpi,96),top,r.right-pad,top+row}; auto text=display(reading);
-            SetTextColor(dc,percent(reading)>=0 ? isLow(reading) ? RGB(255,171,111) : RGB(246,246,247) : RGB(185,187,194)); DrawTextW(dc,text.c_str(),-1,&status,DT_SINGLELINE|DT_VCENTER|DT_RIGHT|DT_END_ELLIPSIS|DT_NOPREFIX); ++i;
+    if (msg == WM_ERASEBKGND) return 1;
+    if (msg == WM_DPICHANGED) {
+        popupDpi = HIWORD(w);
+        if (IsWindowVisible(h)) {
+            const auto& r = *reinterpret_cast<const RECT*>(l);
+            SetWindowPos(h, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOACTIVATE | SWP_NOZORDER);
         }
-        SelectObject(dc,oldFont); EndPaint(h,&ps); return 0;
+        return 0;
     }
-    return DefWindowProcW(h,msg,w,l);
+    if (msg == WM_PAINT) {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(h, &ps);
+        RECT r;
+        GetClientRect(h, &r);
+        HDC buffer = CreateCompatibleDC(dc);
+        HBITMAP bitmap = buffer ? CreateCompatibleBitmap(dc, r.right, r.bottom) : nullptr;
+        HGDIOBJ previous = bitmap ? SelectObject(buffer, bitmap) : nullptr;
+        paintPanel(previous ? buffer : dc, r);
+        if (previous) {
+            BitBlt(dc, 0, 0, r.right, r.bottom, buffer, 0, 0, SRCCOPY);
+            SelectObject(buffer, previous);
+        }
+        if (bitmap) DeleteObject(bitmap);
+        if (buffer) DeleteDC(buffer);
+        EndPaint(h, &ps);
+        return 0;
+    }
+    return DefWindowProcW(h, msg, w, l);
 }
 static LRESULT CALLBACK mainProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
     try {
@@ -380,29 +532,31 @@ static LRESULT CALLBACK mainProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
             if (code == NIN_SELECT || code == NIN_KEYSELECT) { bool moved = hasPress && (abs(point.x-pressed.x)>GetSystemMetrics(SM_CXDRAG)/2 || abs(point.y-pressed.y)>GetSystemMetrics(SM_CYDRAG)/2); if(code==NIN_KEYSELECT || (!dragged&&!moved)) openPopup(true); hasPress=false; dragged=false; }
             if (code == NIN_POPUPOPEN) openPopup(false); if (code == WM_CONTEXTMENU) menu(); return 0;
         }
-        if (msg == WM_INPUT && !suspended && isTargetKeyboard((HRAWINPUT)l)) { ULONGLONG now=GetTickCount64(); bool resumed=keyboardUntil<=now; keyboardUntil=now+30000; SetTimer(h,Idle,30000,nullptr); if(resumed) SetTimer(h,Debounce,1800,nullptr); }
-        if (msg == WM_INPUT_DEVICE_CHANGE || msg == WM_DEVICECHANGE) {
+        if (msg == WM_INPUT && !suspended && isTargetKeyboard((HRAWINPUT)l)) {
+            auto interval = settings.at("PollSeconds").integer(60) * 1000;
+            if (keyboardPolling.observe(GetTickCount64(), interval))
+                SetTimer(h, KeyboardDebounce, Policy::KeyboardPolling::debounceMs, nullptr);
+        }
+        if (msg == WM_DEVICECHANGE) SetTimer(h, Debounce, 350, nullptr);
+        if (msg == WM_INPUT_DEVICE_CHANGE) {
             // Activity from a removed/replaced receiver never authorizes the new
             // receiver. Wait for fresh physical keyboard input after reconnect.
-            keyboardDevices.clear(); keyboardUntil = manualUntil = 0; KillTimer(h,Idle); cancelWorker();
+            keyboardDevices.clear(); keyboardPolling = {}; cancelWorker();
+            snapshot["Devices"] = Json::arr();
             snapshot["Mouse"] = emptyReading("A950", "鼠标", "Unknown", "设备连接发生变化，等待读取。");
             snapshot["Keyboard"] = emptyReading("S75", "键盘", "Idle", "设备连接发生变化，按键后恢复读取。");
-            snapshot["CapturedAt"] = timestamp(); render(); publishSnapshot(); SetTimer(h,Debounce,1800,nullptr);
+            snapshot["CapturedAt"] = timestamp(); render(); publishSnapshot(); SetTimer(h,Debounce,350,nullptr);
         }
         if (msg == WM_DISPLAYCHANGE) dismissPopup();
         if (msg == WM_POWERBROADCAST) {
-            if (w == PBT_APMSUSPEND) { suspended=true; keyboardUntil=manualUntil=0; keyboardDevices.clear(); KillTimer(h,Idle); cancelWorker(); dismissPopup(); snapshot["Mouse"]=emptyReading("A950","鼠标","Unknown","系统休眠，等候恢复读取"); snapshot["Keyboard"]=emptyReading("S75","键盘","Idle","系统休眠，按键后恢复读取"); render(); publishSnapshot(); }
+            if (w == PBT_APMSUSPEND) { suspended=true; keyboardPolling = {}; keyboardDevices.clear(); cancelWorker(); snapshot["Devices"] = Json::arr(); dismissPopup(); snapshot["Mouse"]=emptyReading("A950","鼠标","Unknown","系统休眠，等候恢复读取"); snapshot["Keyboard"]=emptyReading("S75","键盘","Idle","系统休眠，按键后恢复读取"); render(); publishSnapshot(); }
             if (w == PBT_APMRESUMEAUTOMATIC || w == PBT_APMRESUMESUSPEND) { suspended=false; SetTimer(h,Debounce,1800,nullptr); }
         }
         if (msg == WM_TIMER) {
             if(w==Poll) requestRefresh(); if(w==Debounce) { KillTimer(h,Debounce); requestRefresh(); }
             if(w==TrayRetry) { KillTimer(h,TrayRetry); addTray(); }
             if(w==Watch && worker && (WaitForSingleObject(worker,0)==WAIT_OBJECT_0 || GetTickCount64()-workerStarted>8000)) finishWorker(GetTickCount64()-workerStarted>8000);
-            if(w==Idle) {
-                ULONGLONG now=GetTickCount64();
-                if(queryUntil()>now) SetTimer(h,Idle,(UINT)std::max<ULONGLONG>(10,queryUntil()-now),nullptr);
-                else { KillTimer(h,Idle); if(percent(snapshot.at("Keyboard"))>=0) {snapshot["Keyboard"]=emptyReading("S75","键盘","Idle","键盘闲置，暂停查询以免干扰熄灯省电；按键后恢复。"); render(); publishSnapshot();} }
-            }
+            if (w == KeyboardDebounce) { KillTimer(h, KeyboardDebounce); requestRefresh(Refresh::Keyboard); }
             if(w==PopupWatch) { POINT p; GetCursorPos(&p); RECT bounds; GetWindowRect(popupWindow,&bounds); bool inside=PtInRect(&bounds,p)!=FALSE || PtInRect(&popupAnchor,p)!=FALSE;
                 if(GetAsyncKeyState(VK_ESCAPE)<0 || (!inside&&GetAsyncKeyState(VK_LBUTTON)<0)) dismissPopup();
                 else if(pinned||inside) outsideSince=0;
@@ -458,6 +612,39 @@ static int selfTest(const std::wstring& path) {
     settings["KeyboardReceiver"] = firstKey; check(keyboardActivityPath(firstPath)); check(!keyboardActivityPath(secondPath));
     settings["KeyboardReceiver"] = secondKey; check(!keyboardActivityPath(firstPath)); check(keyboardActivityPath(secondPath));
     settings["KeyboardReceiver"] = "offline"; check(!keyboardActivityPath(firstPath));
+    settings["KeyboardReceiver"] = Json();
+    auto previousKeyboard = emptyReading("S75", "键盘", "Valid", "");
+    previousKeyboard["Percent"] = 73;
+    previousKeyboard["ReceiverKey"] = firstKey;
+    history["S75"] = previousKeyboard;
+    snapshot["Keyboard"] = emptyReading("S75", "键盘", "Idle", "");
+    check(!cachedKeyboardReading()); // Ambiguous receiver.
+    settings["KeyboardReceiver"] = firstKey;
+    check(cachedKeyboardReading() && percent(*cachedKeyboardReading()) == 73);
+    check(!readingTime(*cachedKeyboardReading()).empty());
+    snapshot["Keyboard"]["State"] = "Sleeping";
+    check(cachedKeyboardReading() != nullptr);
+    snapshot["Keyboard"]["State"] = "WirelessDisconnected";
+    check(!cachedKeyboardReading());
+    snapshot["Keyboard"]["State"] = "Idle";
+    settings["KeyboardReceiver"] = secondKey;
+    check(!cachedKeyboardReading()); // Readings belong to the selected receiver.
+    settings["KeyboardReceiver"] = firstKey;
+    history["S75"]["Percent"] = 101;
+    check(!cachedKeyboardReading());
+    history["S75"] = previousKeyboard;
+    snapshot["Devices"] = Json::arr();
+    check(!cachedKeyboardReading()); // Unplugged or not enumerated yet.
+    Policy::KeyboardPolling activity;
+    check(activity.take(1000) == 0); // A passive scan cannot acquire permission.
+    check(activity.observe(1000, 60000));
+    check(!activity.observe(1100, 60000));
+    check(activity.take(1200) == Policy::KeyboardPolling::activeMs - 100);
+    check(activity.take(1300) == 0);
+    activity.lastAttempt = 1200;
+    check(!activity.observe(61199, 60000));
+    check(activity.observe(61200, 60000));
+    check(activity.take(66200) == 0); // Do not query after delayed worker / idle.
     for (unsigned failures : {0u, 1u, 2u, 5u, 100u}) check(Policy::trayRetryMilliseconds(failures) >= 1000 && Policy::trayRetryMilliseconds(failures) <= 30000);
     Policy::LowBatteryEpisode low;
     check(!low.observe(80, false, 20, true)); check(low.observe(20, false, 20, true)); low.acknowledge();
@@ -478,7 +665,7 @@ static int selfTest(const std::wstring& path) {
 }
 int WINAPI wWinMain(HINSTANCE h, HINSTANCE, PWSTR, int) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    instance=h; int argc=0; auto argv=CommandLineToArgvW(GetCommandLineW(),&argc); std::vector<std::wstring> args(argv,argv+argc);LocalFree(argv);
+    int argc=0; auto argv=CommandLineToArgvW(GetCommandLineW(),&argc); std::vector<std::wstring> args(argv,argv+argc);LocalFree(argv);
     wchar_t exe[32768];GetModuleFileNameW(nullptr,exe,32768);executableDirectory=std::wstring(exe);executableDirectory.resize(executableDirectory.find_last_of(L"\\/"));
     PWSTR local=nullptr;if(FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData,0,nullptr,&local)))return 1;root=std::wstring(local)+L"\\PeripheralBattery";CoTaskMemFree(local);CreateDirectoryW(root.c_str(),nullptr);
     ULONG_PTR gdiplus=0; GdiplusStartupInput input; if(GdiplusStartup(&gdiplus,&input,nullptr)!=Ok)return 1;
@@ -495,19 +682,24 @@ int WINAPI wWinMain(HINSTANCE h, HINSTANCE, PWSTR, int) {
         WNDCLASSW wc{};wc.hInstance=h;wc.lpfnWndProc=mainProc;wc.lpszClassName=L"PeripheralBattery.Native";RegisterClassW(&wc);
         wc.lpfnWndProc=popupProc;wc.lpszClassName=L"PeripheralBattery.Popup";wc.style=CS_DROPSHADOW;wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);RegisterClassW(&wc);
         taskbarCreated=RegisterWindowMessageW(L"TaskbarCreated"); mainWindow=CreateWindowExW(WS_EX_TOOLWINDOW,L"PeripheralBattery.Native",L"PeripheralBattery.Tray",WS_POPUP,0,0,0,0,nullptr,nullptr,h,nullptr);
-        popupWindow=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_TOPMOST,L"PeripheralBattery.Popup",L"无线外设电量",WS_POPUP,0,0,136,58,nullptr,nullptr,h,nullptr);
+        popupWindow=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_TOPMOST,L"PeripheralBattery.Popup",L"无线外设电量",WS_POPUP,0,0,PanelWidth,PanelHeight,nullptr,nullptr,h,nullptr);
         int corner=2;DwmSetWindowAttribute(popupWindow,33,&corner,sizeof(corner));
         if(!mainWindow||!popupWindow)throw std::runtime_error("Cannot create tray window");
         RAWINPUTDEVICE keyboard{1,6,RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,mainWindow};if(!RegisterRawInputDevices(&keyboard,1,sizeof(keyboard)))log("键盘活动通知不可用，自动键盘查询保持暂停");
         for(int i=0;i<6;++i){auto name=L"Local\\PeripheralBattery.Command.v1."+std::to_wstring(i);signals[i]=CreateEventW(nullptr,FALSE,FALSE,name.c_str());if(!signals[i])throw std::runtime_error("Cannot create command channel");}
-        loadSettings();snapshot["CapturedAt"]=timestamp();snapshot["Devices"]=Json::arr();snapshot["Mouse"]=emptyReading("A950","鼠标","Unknown","等待读取");snapshot["Keyboard"]=emptyReading("S75","键盘","Idle","键盘闲置，按键后恢复读取");
+        loadSettings();
+        try {
+            auto saved = Json::parse(readFile(root + L"\\live-history.json"));
+            if (saved.type == Json::Object) history = std::move(saved);
+        } catch (...) { } // First launch or an interrupted write has no prior sample.
+        snapshot["CapturedAt"]=timestamp();snapshot["Devices"]=Json::arr();snapshot["Mouse"]=emptyReading("A950","鼠标","Unknown","等待读取");snapshot["Keyboard"]=emptyReading("S75","键盘","Idle","键盘闲置，按键后恢复读取");
         render();addTray();log("启动 v" APP_VERSION " · 原生低内存托盘");requestRefresh();
         if(command==1)openUI(1);else if(command==2)openUI(0);else if(argc>1&&args[1]==L"--show")openPopup(true);
         bool running=true;while(running){DWORD wait=MsgWaitForMultipleObjects(6,signals,FALSE,INFINITE,QS_ALLINPUT);
-            if(wait<WAIT_OBJECT_0+6){int c=(int)(wait-WAIT_OBJECT_0);if(c==0)openPopup(true);if(c==1)openUI(1);if(c==2)openUI(0);if(c==3)quit();if(c==4)requestRefresh(true);if(c==5)reloadSettings();}
+            if(wait<WAIT_OBJECT_0+6){int c=(int)(wait-WAIT_OBJECT_0);if(c==0)openPopup(true);if(c==1)openUI(1);if(c==2)openUI(0);if(c==3)quit();if(c==4)requestRefresh(Refresh::Manual);if(c==5)reloadSettings();}
             if(wait==WAIT_FAILED)throw std::runtime_error("Message wait failed");MSG msg;while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)){if(msg.message==WM_QUIT){running=false;break;}TranslateMessage(&msg);DispatchMessageW(&msg);}
         }
     }catch(const std::exception& e){log(e.what());MessageBoxW(nullptr,wide(e.what()).c_str(),L"无线外设电量",MB_OK|MB_ICONERROR);result=1;}
     closing=true;if(worker)finishWorker(true);if(registeredIcon){auto d=notifyData();Shell_NotifyIconW(NIM_DELETE,&d);}for(auto signal:signals)if(signal)CloseHandle(signal);for(auto ui:uiProcesses)if(ui)CloseHandle(ui);
-    if(childJob)CloseHandle(childJob);if(icon)DestroyIcon(icon);if(popupFont)DeleteObject(popupFont);if(mutex)CloseHandle(mutex);GdiplusShutdown(gdiplus);return result;
+    if(childJob)CloseHandle(childJob);if(icon)DestroyIcon(icon);if(mutex)CloseHandle(mutex);GdiplusShutdown(gdiplus);return result;
 }

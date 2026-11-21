@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <cstdint>
 #include <string>
 
 namespace Policy {
@@ -29,6 +30,25 @@ inline std::string physicalReceiver(std::string key) {
 inline unsigned trayRetryMilliseconds(unsigned failures) {
     return std::min(30000u, 1000u << std::min(failures, 5u));
 }
+struct KeyboardPolling {
+    static constexpr unsigned debounceMs = 250;
+    static constexpr unsigned activeMs = 5000;
+    std::uint64_t activeUntil = 0;
+    std::uint64_t lastAttempt = 0;
+    bool pending = false;
+
+    bool observe(std::uint64_t now, unsigned intervalMs) {
+        activeUntil = now + activeMs;
+        if (pending || (lastAttempt && now - lastAttempt < intervalMs)) return false;
+        pending = true;
+        return true;
+    }
+    unsigned take(std::uint64_t now) {
+        bool allowed = pending && now < activeUntil;
+        pending = false;
+        return allowed ? static_cast<unsigned>(activeUntil - now) : 0;
+    }
+};
 struct LowBatteryEpisode {
     bool notified = false;
     int rearmAbove = 25;
