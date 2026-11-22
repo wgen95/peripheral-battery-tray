@@ -11,6 +11,11 @@ inline std::string upper(std::string text) {
 inline std::string hidPath(std::string path) {
     path = upper(path);
     if (path.size() >= 4 && path.compare(path.size() - 4, 4, "\\KBD") == 0) path.resize(path.size() - 4);
+    // Raw Input can name the keyboard-class interface of the same HID collection.
+    const auto interfaceClass = path.rfind("#{");
+    if (path.rfind("\\\\?\\HID#", 0) == 0 && interfaceClass != std::string::npos &&
+        path.compare(interfaceClass, std::string::npos, "#{884B96C3-56EF-11D1-BC8C-00A0C91405DD}") == 0)
+        path.replace(interfaceClass, std::string::npos, "#{4D1E55B2-F16F-11CF-88CB-001111000030}");
     return path;
 }
 // Windows gives each USB composite interface a different MI/suffix. Remove only
@@ -29,6 +34,9 @@ inline std::string physicalReceiver(std::string key) {
 }
 inline unsigned trayRetryMilliseconds(unsigned failures) {
     return std::min(30000u, 1000u << std::min(failures, 5u));
+}
+inline bool popupTimedOut(bool enabled, std::uint64_t shownAt, std::uint64_t now) {
+    return enabled && now - shownAt >= 2000;
 }
 struct KeyboardPolling {
     static constexpr unsigned debounceMs = 250;

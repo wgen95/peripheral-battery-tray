@@ -25,6 +25,14 @@ Check(JsonSerializer.Deserialize<AppSettings>("{}", Json.Options)!.LowBatteryNot
     "old settings enable the low battery reminder by default");
 Check(!JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(new AppSettings { LowBatteryNotifications = false }, Json.Options), Json.Options)!.LowBatteryNotifications,
     "disabled low battery reminders survive settings serialization");
+Check(!JsonSerializer.Deserialize<AppSettings>("{}", Json.Options)!.PopupAutoDismiss,
+    "existing settings leave the two-second popup timeout off");
+Check(JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(new AppSettings { PopupAutoDismiss = true }, Json.Options), Json.Options)!.PopupAutoDismiss,
+    "enabled popup timeout survives settings serialization");
+Check(SettingsForm.MergeEdits(new AppSettings(), new AppSettings { PopupAutoDismiss = true }, new AppSettings()).PopupAutoDismiss,
+    "saving an edited popup timeout applies the selected value");
+Check(SettingsForm.MergeEdits(new AppSettings(), new AppSettings(), new AppSettings { PopupAutoDismiss = true }).PopupAutoDismiss,
+    "saving an unrelated setting preserves the latest popup timeout");
 var paletteSettings = new AppSettings { ColorTheme = TrayColorTheme.Purple };
 Check(JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(paletteSettings, Json.Options), Json.Options)!.ColorTheme == TrayColorTheme.Purple,
     "palette survives settings serialization");
@@ -160,6 +168,7 @@ var settingsThread = new Thread(() =>
     try
     {
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); Application.EnableVisualStyles();
+        settings.PopupAutoDismiss = true;
         using var form = new SettingsForm(settings, [], _ => throw new Exception("preview must not save user settings"));
         var order = (ComboBox)form.Controls.Find("RingOrder", true).Single();
         Check(order.SelectedIndex == 1 && order.Items.Count == 2, "settings UI reflects swapped device order");
@@ -167,6 +176,8 @@ var settingsThread = new Thread(() =>
         Check(colors.SelectedIndex == 0 && colors.Items.Count == 6, "settings UI exposes six palettes with monochrome default");
         var notifications = (CheckBox)form.Controls.Find("LowBatteryNotifications", true).Single();
         Check(!notifications.Checked, "settings UI reflects disabled low battery reminders");
+        var autoDismiss = (CheckBox)form.Controls.Find("PopupAutoDismiss", true).Single();
+        Check(autoDismiss.Checked, "settings UI reflects enabled popup timeout");
         // Render offscreen. Do not Show(), run the app, or change the installed tray.
         // A never-shown Form omits invisible children in DrawToBitmap. Render its
         // detached layout instead, with the same font and client dimensions.
@@ -178,6 +189,7 @@ var settingsThread = new Thread(() =>
         Check(layout.ClientRectangle.Contains(order.Bounds), "device order selector fits in the settings layout");
         Check(layout.ClientRectangle.Contains(colors.Bounds), "palette selector fits in the settings layout");
         Check(layout.ClientRectangle.Contains(notifications.Bounds), "low battery reminder fits in the settings layout");
+        Check(layout.ClientRectangle.Contains(autoDismiss.Bounds), "popup timeout fits in the settings layout");
         Check(layout.ClientRectangle.Contains(((Control)form.AcceptButton!).Bounds), "save button fits in the settings layout");
         using var image = new Bitmap(layout.Width, layout.Height);
         layout.DrawToBitmap(image, layout.ClientRectangle);

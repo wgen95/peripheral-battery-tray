@@ -1,6 +1,6 @@
 # 安装与卸载
 
-从 [v2.1.3 Release](https://github.com/wgen95/peripheral-battery-tray/releases/tag/v2.1.3) 下载 `PeripheralBattery-2.1.3-Setup-x64.exe`，双击按中文向导安装。无需单独安装 .NET，也不要求管理员权限。
+从 [v2.1.5 Release](https://github.com/wgen95/peripheral-battery-tray/releases/tag/v2.1.5) 下载 `PeripheralBattery-2.1.5-Setup-x64.exe`，双击按中文向导安装。无需单独安装 .NET，也不要求管理员权限。
 
 - 默认安装到当前用户的 `%LOCALAPPDATA%/Programs/PeripheralBattery`。
 - 自动添加“无线外设电量”开始菜单入口，可以自行勾选桌面快捷方式。

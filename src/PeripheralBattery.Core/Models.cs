@@ -40,6 +40,7 @@ public sealed class AppSettings
     public int PollSeconds { get; set; } = 60;
     public int LowThreshold { get; set; } = 20;
     public bool HoverPanel { get; set; } = true;
+    public bool PopupAutoDismiss { get; set; }
     public bool LowBatteryNotifications { get; set; } = true;
     public bool KeyboardOuterRing { get; set; } = true;
     public TrayColorTheme ColorTheme { get; set; } = TrayColorTheme.Monochrome;

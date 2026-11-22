@@ -21,13 +21,14 @@ using namespace Gdiplus;
 static const GUID IconGuid = { 0x6319a943, 0x4e29, 0x4c5e, {0xa8,0xda,0xa0,0xe0,0x18,0x53,0x5d,0xa5} };
 static constexpr UINT Callback = WM_APP + 1;
 static constexpr UINT_PTR Poll = 1, Debounce = 2, Watch = 3, PopupWatch = 4, KeyboardDebounce = 5, TrayRetry = 6;
-static constexpr int PanelWidth = 216, PanelHeight = 100;
+static constexpr int PanelWidth = 172, PanelHeight = 66;
 enum class Refresh { None, Scan, Keyboard, Manual };
 static Refresh queuedRefresh;
 static HWND mainWindow, popupWindow;
 static HICON icon; static bool registeredIcon, closing, suspended, pinned, menuOpen, dragged, workerQueriesKeyboard;
 static POINT pressed{}; static bool hasPress; static UINT popupDpi = 96;
-static ULONGLONG outsideSince, workerStarted;
+static ULONGLONG popupShownAt, outsideSince, workerStarted;
+static bool popupHoverBlocked;
 static HANDLE worker, uiProcesses[2]{}, signals[6]{}, childJob;
 static std::wstring root, executableDirectory, workerOutput, workerInput;
 static UINT taskbarCreated;
@@ -38,7 +39,7 @@ static Policy::KeyboardPolling keyboardPolling;
 static Policy::LowBatteryEpisode lowEpisodes[2];
 static Json settings = Json::obj(), snapshot = Json::obj(), history = Json::obj();
 static std::string lastIconKey;
-static void dismissPopup();
+static void dismissPopup(bool blockHover = false);
 
 static std::wstring wide(const std::string& s) {
     if (s.empty()) return {}; int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s.data(), (int)s.size(), nullptr, 0);
@@ -341,10 +342,20 @@ static void saveQuickSetting(const char* key, const Json& value) {
         latest[key] = value; writeFile(path, latest.dump()); reloadSettings();
     } catch (const std::exception& e) { log(e.what()); MessageBoxW(mainWindow, L"设置未能保存，请稍后再试。", L"无线外设电量", MB_OK | MB_ICONWARNING); }
 }
-static void dismissPopup() { if (popupWindow) ShowWindow(popupWindow, SW_HIDE); KillTimer(mainWindow, PopupWatch); pinned = false; outsideSince = 0; modifyTray(); }
+static void dismissPopup(bool blockHover) {
+    const bool wasVisible = IsWindowVisible(popupWindow) != FALSE;
+    if (wasVisible) ShowWindow(popupWindow, SW_HIDE);
+    KillTimer(mainWindow, PopupWatch);
+    pinned = false;
+    outsideSince = 0;
+    popupHoverBlocked = blockHover;
+    // Only the standard tip depends on popup visibility. Leave the icon alone
+    // while Explorer handles a press or drag on the tray.
+    if (wasVisible && !hoverEnabled()) modifyTray();
+}
 static void openPopup(bool pin) {
     if (IsWindowVisible(popupWindow)) { if (pin && pinned) { dismissPopup(); return; } pinned = pinned || pin; return; }
-    if (!pin && (GetAsyncKeyState(VK_LBUTTON) < 0 || menuOpen || !hoverEnabled())) return;
+    if (!pin && (popupHoverBlocked || GetAsyncKeyState(VK_LBUTTON) < 0 || menuOpen || !hoverEnabled())) return;
     NOTIFYICONIDENTIFIER id{}; id.cbSize = sizeof(id); id.hWnd = mainWindow; id.uID = 1; id.guidItem = IconGuid; RECT iconRect{}; POINT point{};
     popupAnchor = {};
     if (Shell_NotifyIconGetRect(&id, &iconRect) == S_OK) { point = {(iconRect.left + iconRect.right) / 2, iconRect.top}; popupAnchor = iconRect; } else GetCursorPos(&point);
@@ -354,8 +365,29 @@ static void openPopup(bool pin) {
     int width = MulDiv(PanelWidth, popupDpi, 96), height = MulDiv(PanelHeight, popupDpi, 96);
     int x = std::clamp((int)point.x - width / 2, (int)monitor.rcWork.left, (int)monitor.rcWork.right - width);
     int y = std::clamp((int)point.y - height - MulDiv(12, popupDpi, 96), (int)monitor.rcWork.top, (int)monitor.rcWork.bottom - height);
-    pinned = pin; outsideSince = 0;
-    SetWindowPos(popupWindow, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW); SetTimer(mainWindow, PopupWatch, 100, nullptr); modifyTray();
+    pinned = pin;
+    outsideSince = 0;
+    popupShownAt = GetTickCount64();
+    popupHoverBlocked = false;
+    SetWindowPos(popupWindow, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    SetTimer(mainWindow, PopupWatch, 100, nullptr);
+    if (!hoverEnabled()) modifyTray();
+}
+static void watchPopup() {
+    if (!IsWindowVisible(popupWindow)) return;
+    POINT pointer{};
+    RECT bounds{};
+    GetCursorPos(&pointer);
+    GetWindowRect(popupWindow, &bounds);
+    const bool overIcon = PtInRect(&popupAnchor, pointer) != FALSE;
+    const bool inside = overIcon || PtInRect(&bounds, pointer) != FALSE;
+    const auto now = GetTickCount64();
+    const bool autoDismiss = settings.at("PopupAutoDismiss").flag(false);
+    if (Policy::popupTimedOut(autoDismiss, popupShownAt, now)) dismissPopup(overIcon);
+    else if (GetAsyncKeyState(VK_ESCAPE) < 0 || (!inside && GetAsyncKeyState(VK_LBUTTON) < 0)) dismissPopup();
+    else if (autoDismiss || pinned || inside) outsideSince = 0;
+    else if (!outsideSince) outsideSince = now;
+    else if (now - outsideSince > 1400) dismissPopup();
 }
 static BOOL CALLBACK recallUIWindow(HWND window, LPARAM processId) {
     DWORD id = 0; GetWindowThreadProcessId(window, &id);
@@ -413,47 +445,16 @@ static std::wstring readingTime(const Json& reading) {
     return wide(iso.substr(5, 5) + " " + iso.substr(11, 5));
 }
 
-static void roundedBox(Graphics& g, REAL x, REAL y, REAL w, REAL h, REAL radius, Color color) {
-    GraphicsPath path;
-    const REAL d = radius * 2;
-    path.AddArc(x, y, d, d, 180, 90);
-    path.AddArc(x + w - d, y, d, d, 270, 90);
-    path.AddArc(x + w - d, y + h - d, d, d, 0, 90);
-    path.AddArc(x, y + h - d, d, d, 90, 90);
-    path.CloseFigure();
-    SolidBrush fill(color);
-    g.FillPath(&fill, &path);
-}
-
 static void panelRow(HDC dc, bool keyboard, const Json& current, const Json* cached, int top) {
-    constexpr int rowHeight = 40, textLeft = 48, contentRight = PanelWidth - 15, barWidth = 42;
+    constexpr int textLeft = 12, contentRight = PanelWidth - 12;
     const auto& shown = cached ? *cached : current;
     const int battery = percent(shown);
-    const bool low = !cached && isLow(current);
-    const Color accent = cached ? Color(174, 186, 207) : low ? Color(255, 151, 151) : Color(143, 221, 200);
+    const auto foreground = GetSysColor(COLOR_WINDOWTEXT);
+    const auto secondary = GetSysColor(COLOR_GRAYTEXT);
+    const auto background = GetSysColor(COLOR_WINDOW);
+    const bool lightBackground = GetRValue(background) + GetGValue(background) + GetBValue(background) > 382;
+    const auto lowColor = lightBackground ? RGB(176, 32, 42) : RGB(255, 151, 151);
     const auto s = [](int value) { return MulDiv(value, popupDpi, 96); };
-    {
-        Graphics g(dc);
-        g.ScaleTransform(popupDpi / 96.0f, popupDpi / 96.0f);
-        g.SetSmoothingMode(SmoothingModeAntiAlias);
-        roundedBox(g, 7, top, PanelWidth - 14, rowHeight, 8, Color(35, 40, 51));
-        roundedBox(g, 14, top + 8, 24, 24, 7, Color(47, 56, 70));
-        Pen glyph(Color(191, 205, 225), 1.2f);
-        if (keyboard) {
-            g.DrawRectangle(&glyph, 19, top + 16, 14, 8);
-            for (int x : {21, 24, 27, 30}) g.DrawLine(&glyph, x, top + 18, x, top + 19);
-            g.DrawLine(&glyph, 23, top + 22, 29, top + 22);
-        } else {
-            g.DrawEllipse(&glyph, 21, top + 13, 10, 14);
-            g.DrawLine(&glyph, 26, top + 13, 26, top + 19);
-        }
-        if (battery >= 0) {
-            constexpr int barLeft = contentRight - barWidth;
-            roundedBox(g, barLeft, top + 29, barWidth, 3, 1.5f, Color(68, 77, 94));
-            const REAL fill = barWidth * battery / 100.0f;
-            if (fill > 0) roundedBox(g, barLeft, top + 29, fill, 3, std::min(1.5f, fill / 2), accent);
-        }
-    }
     const auto drawText = [&](const std::wstring& value, int size, int weight, COLORREF color, RECT bounds, UINT align) {
         HFONT font = CreateFontW(-s(size), 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
@@ -462,38 +463,42 @@ static void panelRow(HDC dc, bool keyboard, const Json& current, const Json* cac
         DrawTextW(dc, value.c_str(), -1, &bounds, align | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
         if (font) { SelectObject(dc, old); DeleteObject(font); }
     };
-    const bool showStatus = cached || battery < 0;
-    drawText(keyboard ? L"S75" : L"A950", 13, FW_SEMIBOLD, RGB(245, 248, 255),
-        {s(textLeft), s(top + (showStatus ? 2 : 0)), s(142), s(top + (showStatus ? 20 : rowHeight))}, DT_LEFT);
-    if (showStatus) {
-        std::wstring status = cached ? L"上次读取" : display(current);
-        if (cached) {
-            auto time = readingTime(shown);
-            if (!time.empty()) status += L" · " + time;
-        }
-        drawText(status, 10, FW_NORMAL, RGB(179, 192, 213),
-            {s(textLeft), s(top + 20), s(cached ? 158 : contentRight), s(top + 36)}, DT_LEFT);
-    }
-    if (battery >= 0) {
-        auto valueColor = low || cached ? RGB(accent.GetR(), accent.GetG(), accent.GetB()) : RGB(245, 248, 255);
-        drawText(display(shown), 18, FW_SEMIBOLD, valueColor,
-            {s(142), s(top + 2), s(contentRight), s(top + 27)}, DT_RIGHT);
+
+    const int bottom = top + (cached ? 18 : 27);
+    drawText(keyboard ? L"S75" : L"A950", 12, FW_SEMIBOLD, foreground,
+        {s(textLeft), s(top), s(64), s(bottom)}, DT_LEFT);
+    const auto valueColor = !cached && isLow(current) ? lowColor : (cached || battery < 0 ? secondary : foreground);
+    drawText(display(shown), battery >= 0 ? 16 : 10, battery >= 0 ? FW_SEMIBOLD : FW_NORMAL, valueColor,
+        {s(64), s(top), s(contentRight), s(bottom)}, DT_RIGHT);
+    if (cached) {
+        std::wstring status = L"上次读取";
+        auto time = readingTime(shown);
+        if (!time.empty()) status += L" · " + time;
+        drawText(status, 10, FW_NORMAL, secondary,
+            {s(textLeft), s(top + 17), s(contentRight), s(top + 30)}, DT_LEFT);
     }
 }
 
 static void paintPanel(HDC dc, const RECT& bounds) {
-    HBRUSH background = CreateSolidBrush(RGB(23, 27, 34));
-    FillRect(dc, &bounds, background);
-    DeleteObject(background);
+    FillRect(dc, &bounds, GetSysColorBrush(COLOR_WINDOW));
+    const auto background = GetSysColor(COLOR_WINDOW), foreground = GetSysColor(COLOR_WINDOWTEXT);
+    const auto tint = [](BYTE bg, BYTE fg) { return (bg * 5 + fg) / 6; };
+    HBRUSH rule = CreateSolidBrush(RGB(tint(GetRValue(background), GetRValue(foreground)),
+        tint(GetGValue(background), GetGValue(foreground)), tint(GetBValue(background), GetBValue(foreground))));
+    FrameRect(dc, &bounds, rule);
+    const int margin = MulDiv(12, popupDpi, 96), separator = MulDiv(32, popupDpi, 96);
+    const RECT divider{margin, separator, bounds.right - margin, separator + 1};
+    FillRect(dc, &divider, rule);
+    DeleteObject(rule);
     SetBkMode(dc, TRANSPARENT);
-    panelRow(dc, false, snapshot.at("Mouse"), nullptr, 7);
-    panelRow(dc, true, snapshot.at("Keyboard"), cachedKeyboardReading(), 53);
+    panelRow(dc, false, snapshot.at("Mouse"), nullptr, 4);
+    panelRow(dc, true, snapshot.at("Keyboard"), cachedKeyboardReading(), 34);
 }
-
 static LRESULT CALLBACK popupProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
     if (msg == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
     if (msg == WM_LBUTTONDOWN) { dismissPopup(); return 0; }
     if (msg == WM_ERASEBKGND) return 1;
+    if (msg == WM_SYSCOLORCHANGE) { InvalidateRect(h, nullptr, FALSE); return 0; }
     if (msg == WM_DPICHANGED) {
         popupDpi = HIWORD(w);
         if (IsWindowVisible(h)) {
@@ -528,9 +533,15 @@ static LRESULT CALLBACK mainProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
         if (msg == Callback) {
             UINT code = LOWORD(l); POINT point{ (short)LOWORD(w), (short)HIWORD(w) };
             if (code == WM_LBUTTONDOWN) { pressed = point; hasPress = true; dragged = false; if (!pinned) dismissPopup(); }
-            if (code == WM_MOUSEMOVE && GetAsyncKeyState(VK_LBUTTON) < 0) { if (hasPress && (abs(point.x-pressed.x)>GetSystemMetrics(SM_CXDRAG)/2 || abs(point.y-pressed.y)>GetSystemMetrics(SM_CYDRAG)/2)) dragged=true; dismissPopup(); }
+            if (code == WM_MOUSEMOVE && GetAsyncKeyState(VK_LBUTTON) < 0) {
+                if (hasPress && (abs(point.x-pressed.x)>GetSystemMetrics(SM_CXDRAG)/2 || abs(point.y-pressed.y)>GetSystemMetrics(SM_CYDRAG)/2)) dragged=true;
+                if (IsWindowVisible(popupWindow)) dismissPopup();
+            }
             if (code == NIN_SELECT || code == NIN_KEYSELECT) { bool moved = hasPress && (abs(point.x-pressed.x)>GetSystemMetrics(SM_CXDRAG)/2 || abs(point.y-pressed.y)>GetSystemMetrics(SM_CYDRAG)/2); if(code==NIN_KEYSELECT || (!dragged&&!moved)) openPopup(true); hasPress=false; dragged=false; }
-            if (code == NIN_POPUPOPEN) openPopup(false); if (code == WM_CONTEXTMENU) menu(); return 0;
+            if (code == NIN_POPUPOPEN) openPopup(false);
+            if (code == NIN_POPUPCLOSE) popupHoverBlocked = false;
+            if (code == WM_CONTEXTMENU) menu();
+            return 0;
         }
         if (msg == WM_INPUT && !suspended && isTargetKeyboard((HRAWINPUT)l)) {
             auto interval = settings.at("PollSeconds").integer(60) * 1000;
@@ -557,11 +568,7 @@ static LRESULT CALLBACK mainProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
             if(w==TrayRetry) { KillTimer(h,TrayRetry); addTray(); }
             if(w==Watch && worker && (WaitForSingleObject(worker,0)==WAIT_OBJECT_0 || GetTickCount64()-workerStarted>8000)) finishWorker(GetTickCount64()-workerStarted>8000);
             if (w == KeyboardDebounce) { KillTimer(h, KeyboardDebounce); requestRefresh(Refresh::Keyboard); }
-            if(w==PopupWatch) { POINT p; GetCursorPos(&p); RECT bounds; GetWindowRect(popupWindow,&bounds); bool inside=PtInRect(&bounds,p)!=FALSE || PtInRect(&popupAnchor,p)!=FALSE;
-                if(GetAsyncKeyState(VK_ESCAPE)<0 || (!inside&&GetAsyncKeyState(VK_LBUTTON)<0)) dismissPopup();
-                else if(pinned||inside) outsideSince=0;
-                else { if(!outsideSince)outsideSince=GetTickCount64(); if(GetTickCount64()-outsideSince>1400) dismissPopup(); }
-            }
+            if (w == PopupWatch) watchPopup();
         }
         if (msg == WM_CLOSE) { quit(); return 0; } if(msg==WM_DESTROY) { PostQuitMessage(0); return 0; }
     } catch(const std::exception& e) { log(e.what()); }
@@ -591,12 +598,15 @@ static int selfTest(const std::wstring& path) {
     check(Policy::physicalReceiver("HID\\VID_0C45&PID_FEFA&MI_03\\6&EXAMPLE&0&0003").empty());
     check(Policy::physicalReceiver("USB\\VID_0C45&PID_FEFA&MI_G1\\6&EXAMPLE&0&00G1").empty());
     check(Policy::hidPath("\\\\?\\hid#vid_0c45&pid_fefa#example#{guid}\\kbd") == Policy::hidPath("\\\\?\\HID#VID_0C45&PID_FEFA#EXAMPLE#{GUID}"));
+    check(Policy::hidPath("\\\\?\\HID#VID_0C45&PID_FEFA&MI_00#FIRST#{884B96C3-56EF-11D1-BC8C-00A0C91405DD}") ==
+        Policy::hidPath("\\\\?\\hid#vid_0c45&pid_fefa&mi_00#first#{4d1e55b2-f16f-11cf-88cb-001111000030}\\kbd"));
     auto device = [](const char* path, const char* receiver, int usagePage, int usage) {
         Json d = Json::obj(); d["Path"] = path; d["ReceiverKey"] = receiver; d["Vid"] = 0x0c45; d["Pid"] = 0xfefa;
         d["UsagePage"] = usagePage; d["Usage"] = usage; d["InputLength"] = 65; d["OutputLength"] = 65; return d;
     };
     const char* firstKey = "USB\\VID_0C45&PID_FEFA&MI_03\\6&FIRST&0&0003";
-    const char* firstPath = "\\\\?\\hid#vid_0c45&pid_fefa&mi_00#first#{guid}\\kbd";
+    const char* firstPath = "\\\\?\\hid#vid_0c45&pid_fefa&mi_00#first#{4d1e55b2-f16f-11cf-88cb-001111000030}\\kbd";
+    const char* firstRawPath = "\\\\?\\HID#VID_0C45&PID_FEFA&MI_00#FIRST#{884B96C3-56EF-11D1-BC8C-00A0C91405DD}";
     const char* secondKey = "USB\\VID_0C45&PID_FEFA&MI_03\\6&SECOND&0&0003";
     const char* secondPath = "\\\\?\\hid#vid_0c45&pid_fefa&mi_00#second#{guid}\\kbd";
     snapshot = Json::obj(); snapshot["Devices"] = Json::arr(); settings["KeyboardReceiver"] = Json();
@@ -604,11 +614,12 @@ static int selfTest(const std::wstring& path) {
     snapshot["Devices"].array.push_back(device("command-first", firstKey, 0xff60, 0x61));
     snapshot["Devices"].array.push_back(device(firstPath, "USB\\VID_0C45&PID_FEFA&MI_00\\6&FIRST&0&0000", 1, 6));
     check(keyboardActivityPath(firstPath));
+    check(keyboardActivityPath(firstRawPath));
     check(!keyboardActivityPath("\\\\?\\hid#vid_046d&pid_c31c#other#{guid}\\kbd"));
     check(!keyboardActivityPath(secondPath));
     snapshot["Devices"].array.push_back(device("command-second", secondKey, 0xff60, 0x61));
     snapshot["Devices"].array.push_back(device(secondPath, "USB\\VID_0C45&PID_FEFA&MI_00\\6&SECOND&0&0000", 1, 6));
-    check(!keyboardActivityPath(firstPath)); check(!keyboardActivityPath(secondPath));
+    check(!keyboardActivityPath(firstRawPath)); check(!keyboardActivityPath(secondPath));
     settings["KeyboardReceiver"] = firstKey; check(keyboardActivityPath(firstPath)); check(!keyboardActivityPath(secondPath));
     settings["KeyboardReceiver"] = secondKey; check(!keyboardActivityPath(firstPath)); check(keyboardActivityPath(secondPath));
     settings["KeyboardReceiver"] = "offline"; check(!keyboardActivityPath(firstPath));
@@ -645,6 +656,10 @@ static int selfTest(const std::wstring& path) {
     check(!activity.observe(61199, 60000));
     check(activity.observe(61200, 60000));
     check(activity.take(66200) == 0); // Do not query after delayed worker / idle.
+    check(!Policy::popupTimedOut(false, 1000, 10000));
+    check(!Policy::popupTimedOut(true, 1000, 2999));
+    check(Policy::popupTimedOut(true, 1000, 3000));
+    check(!Policy::popupTimedOut(true, 3100, 3200));
     for (unsigned failures : {0u, 1u, 2u, 5u, 100u}) check(Policy::trayRetryMilliseconds(failures) >= 1000 && Policy::trayRetryMilliseconds(failures) <= 30000);
     Policy::LowBatteryEpisode low;
     check(!low.observe(80, false, 20, true)); check(low.observe(20, false, 20, true)); low.acknowledge();
@@ -680,10 +695,11 @@ int WINAPI wWinMain(HINSTANCE h, HINSTANCE, PWSTR, int) {
         if(GetLastError()==ERROR_ALREADY_EXISTS){result=sendCommand(command)?0:1;CloseHandle(mutex);CloseHandle(childJob);GdiplusShutdown(gdiplus);return result;}
         if(command==3){CloseHandle(mutex);CloseHandle(childJob);GdiplusShutdown(gdiplus);return 0;}
         WNDCLASSW wc{};wc.hInstance=h;wc.lpfnWndProc=mainProc;wc.lpszClassName=L"PeripheralBattery.Native";RegisterClassW(&wc);
-        wc.lpfnWndProc=popupProc;wc.lpszClassName=L"PeripheralBattery.Popup";wc.style=CS_DROPSHADOW;wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);RegisterClassW(&wc);
+        wc.lpfnWndProc=popupProc;wc.lpszClassName=L"PeripheralBattery.Popup";wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);RegisterClassW(&wc);
         taskbarCreated=RegisterWindowMessageW(L"TaskbarCreated"); mainWindow=CreateWindowExW(WS_EX_TOOLWINDOW,L"PeripheralBattery.Native",L"PeripheralBattery.Tray",WS_POPUP,0,0,0,0,nullptr,nullptr,h,nullptr);
         popupWindow=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_TOPMOST,L"PeripheralBattery.Popup",L"无线外设电量",WS_POPUP,0,0,PanelWidth,PanelHeight,nullptr,nullptr,h,nullptr);
-        int corner=2;DwmSetWindowAttribute(popupWindow,33,&corner,sizeof(corner));
+        const DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUNDSMALL;
+        DwmSetWindowAttribute(popupWindow, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
         if(!mainWindow||!popupWindow)throw std::runtime_error("Cannot create tray window");
         RAWINPUTDEVICE keyboard{1,6,RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,mainWindow};if(!RegisterRawInputDevices(&keyboard,1,sizeof(keyboard)))log("键盘活动通知不可用，自动键盘查询保持暂停");
         for(int i=0;i<6;++i){auto name=L"Local\\PeripheralBattery.Command.v1."+std::to_wstring(i);signals[i]=CreateEventW(nullptr,FALSE,FALSE,name.c_str());if(!signals[i])throw std::runtime_error("Cannot create command channel");}

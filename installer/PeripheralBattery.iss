@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "2.1.3"
+  #define AppVersion "2.1.5"
 #endif
 #define AppName "无线外设电量"
 
